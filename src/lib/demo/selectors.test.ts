@@ -41,6 +41,16 @@ test('exposes representative dashboard data through narrow selectors', () => {
   assert.ok(superadmin.featureFlags.some((flag) => flag.enabled === false));
 });
 
+test('provides a check-in-capable member history and monthly summary', () => {
+  const member = getMemberDashboard();
+
+  assert.equal(member.today?.status, 'unknown');
+  assert.equal(member.history.length, 7);
+  assert.equal(member.monthlySummary.lateCount, 1);
+  assert.equal(member.monthlySummary.workedMinutes, 2679);
+  assert.ok(member.history.every((row) => row.userKey === member.user.key));
+});
+
 test('scopes manager users and records to the assigned team', () => {
   const manager = getManagerDashboard();
   const teamUserKeys = new Set([manager.team.managerKey, ...manager.team.memberKeys]);

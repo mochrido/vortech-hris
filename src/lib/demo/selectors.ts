@@ -19,7 +19,23 @@ export function getDemoContextView(role: DemoRole): ReadonlyDemoData & { role: D
 
 export function getMemberDashboard() {
   const context = getDemoContext('member');
-  return { role: context.role, user: context.users[0], attendance: context.attendance.filter((row) => row.userKey === 'user-sari-utami'), syncState: context.syncState };
+  const attendance = context.attendance.filter((row) => row.userKey === 'user-sari-utami');
+  const history = attendance.filter((row) => row.date >= '2026-07-31').sort((a, b) => b.date.localeCompare(a.date));
+  const monthlyRows = attendance.filter((row) => row.date.startsWith('2026-08-') && row.checkIn && row.checkOut);
+  const workedMinutes = monthlyRows.reduce((total, row) => {
+    const [inHour, inMinute] = row.checkIn!.split(':').map(Number);
+    const [outHour, outMinute] = row.checkOut!.split(':').map(Number);
+    return total + (outHour * 60 + outMinute) - (inHour * 60 + inMinute);
+  }, 0);
+  return {
+    role: context.role,
+    user: context.users[0],
+    today: attendance.find((row) => row.date === '2026-08-06'),
+    attendance,
+    history,
+    monthlySummary: { lateCount: attendance.filter((row) => row.date.startsWith('2026-08-') && row.status === 'late').length, workedMinutes },
+    syncState: context.syncState,
+  };
 }
 
 export function getManagerDashboard() {
