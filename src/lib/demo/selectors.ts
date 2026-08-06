@@ -50,6 +50,32 @@ export function deriveMemberAttendanceDisplay(state: AttendanceEventState, sourc
   return { today, history };
 }
 
+export function getMemberAttendancePresentation(state: AttendanceEventState) {
+  const pending = state.status === 'pending-sync';
+  const review = state.status === 'review-required';
+  const checkout = state.checkOutCompleted === true;
+  return {
+    todayLabel: checkout && pending ? 'Check-out tercatat · menunggu sinkronisasi' : checkout && review ? 'Check-out tercatat · menunggu tinjauan' : checkout ? 'Sudah selesai' : review ? 'Menunggu tinjauan' : pending ? 'Menunggu sinkronisasi' : state.status !== 'unknown' && state.status !== 'absent' ? 'Sudah check-in' : 'Belum check-in',
+    historyLabel: checkout && pending ? 'Check-out menunggu sinkronisasi' : checkout && review ? 'Check-out menunggu tinjauan' : checkout ? 'Selesai' : review ? 'Perlu tinjauan' : pending ? 'Menunggu sinkronisasi' : 'Hadir',
+    pendingCount: pending ? 1 : 0,
+    reviewCount: review ? 1 : 0,
+  };
+}
+
+export function getMemberScenarioState(state: AttendanceEventState, scenario: AttendanceScenario): AttendanceEventState {
+  return scenario === 'completed'
+    ? { status: 'present', syncState: 'synced', checkOutCompleted: true }
+    : state;
+}
+
+export function getAttendanceHistoryLabel(row: AttendanceSummary) {
+  if (row.status === 'pending-sync') return row.checkOut ? 'Check-out menunggu sinkronisasi' : 'Menunggu sinkronisasi';
+  if (row.status === 'review-required') return row.checkOut ? 'Check-out menunggu tinjauan' : 'Perlu tinjauan';
+  if (row.status === 'late') return 'Terlambat';
+  if (row.status === 'unknown') return 'Belum mulai';
+  return row.checkOut ? 'Selesai' : 'Hadir';
+}
+
 export function getManagerDashboard() {
   const context = getDemoContext('manager');
   const team = context.teams[0];
@@ -92,7 +118,7 @@ export function simulateAttendanceEvent(currentStatus: AttendanceEventState, eve
 
 export function submitMemberAttendance(state: AttendanceEventState, scenario: AttendanceScenario) {
   if (scenario === 'rejected') return { accepted: false as const, state, message: 'Presensi ditolak: di luar geofence simulasi.' };
-  if (scenario === 'completed') return { accepted: false as const, state, message: 'Presensi hari ini sudah selesai.' };
+  if (scenario === 'completed') return { accepted: true as const, state: getMemberScenarioState(state, scenario), message: null };
   const checkedIn = state.status !== 'unknown' && state.status !== 'absent';
   const event: AttendanceEvent = checkedIn
     ? scenario === 'pending' ? 'check-out-offline' : scenario === 'accuracy' ? 'check-out-review' : 'check-out'

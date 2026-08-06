@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   getAdminOverview,
+  getAttendanceHistoryLabel,
   getDemoContext,
   getManagerDashboard,
   getMemberDashboard,
   getSuperadminOverview,
   deriveMemberAttendanceDisplay,
+  getMemberAttendancePresentation,
+  getMemberScenarioState,
   simulateAttendanceEvent,
   submitMemberAttendance,
 } from './selectors.ts';
@@ -191,6 +194,47 @@ test('projects simulated attendance into today and history without mutating fixt
   assert.equal(display.history[0].status, 'pending-sync');
   assert.equal(today.checkIn, null);
   assert.equal(today.status, 'unknown');
+});
+
+test('projects the completed scenario into a finished today card without changing fixtures', () => {
+  const member = getMemberDashboard();
+  const sourceState: AttendanceEventState = { status: 'unknown', syncState: 'idle' };
+  const scenarioState = getMemberScenarioState(sourceState, 'completed');
+  const display = deriveMemberAttendanceDisplay(
+    scenarioState,
+    member.today!,
+    member.history,
+  );
+
+  assert.deepEqual(
+    { checkIn: display.today.checkIn, checkOut: display.today.checkOut, status: display.today.status, syncState: display.today.syncState },
+    { checkIn: '07:54', checkOut: '14:00', status: 'present', syncState: 'synced' },
+  );
+  assert.equal(member.today?.checkIn, null);
+  assert.equal(member.today?.checkOut, null);
+  assert.deepEqual(sourceState, { status: 'unknown', syncState: 'idle' });
+});
+
+test('keeps checkout completion distinct from pending synchronization and review', () => {
+  const pending = getMemberAttendancePresentation({ status: 'pending-sync', syncState: 'queued', checkOutCompleted: true });
+  const review = getMemberAttendancePresentation({ status: 'review-required', syncState: 'synced', checkOutCompleted: true });
+
+  assert.equal(pending.todayLabel, 'Check-out tercatat · menunggu sinkronisasi');
+  assert.equal(pending.historyLabel, 'Check-out menunggu sinkronisasi');
+  assert.equal(pending.pendingCount, 1);
+  assert.equal(pending.reviewCount, 0);
+  assert.equal(review.todayLabel, 'Check-out tercatat · menunggu tinjauan');
+  assert.equal(review.historyLabel, 'Check-out menunggu tinjauan');
+  assert.equal(review.pendingCount, 0);
+  assert.equal(review.reviewCount, 1);
+});
+
+test('labels pending and review checkout history as completed attendance awaiting resolution', () => {
+  const member = getMemberDashboard();
+  const row = member.today!;
+
+  assert.equal(getAttendanceHistoryLabel({ ...row, status: 'pending-sync', checkIn: '07:54', checkOut: '14:00', syncState: 'queued' }), 'Check-out menunggu sinkronisasi');
+  assert.equal(getAttendanceHistoryLabel({ ...row, status: 'review-required', checkIn: '07:54', checkOut: '14:00', syncState: 'synced' }), 'Check-out menunggu tinjauan');
 });
 
 test('does not convert pending or review check-in to online checkout', () => {
