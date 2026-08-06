@@ -1,5 +1,5 @@
 import { demoData } from './data.ts';
-import type { AttendanceEvent, AttendanceEventState, DemoData, DemoRole } from './types.ts';
+import type { AttendanceEvent, AttendanceEventState, AttendanceScenario, AttendanceSummary, DemoData, DemoRole } from './types.ts';
 
 const copy = <T>(value: T): T => structuredClone(value);
 type ReadonlyDemoData = { readonly [Key in keyof DemoData]: DeepReadonly<DemoData[Key]> };
@@ -29,13 +29,25 @@ export function getMemberDashboard() {
   }, 0);
   return {
     role: context.role,
-    user: context.users[0],
+    user: context.users.find((user) => user.key === 'user-sari-utami')!,
     today: attendance.find((row) => row.date === '2026-08-06'),
     attendance,
     history,
     monthlySummary: { lateCount: attendance.filter((row) => row.date.startsWith('2026-08-') && row.status === 'late').length, workedMinutes },
     syncState: context.syncState,
   };
+}
+
+export function deriveMemberAttendanceDisplay(state: AttendanceEventState, sourceToday: AttendanceSummary, sourceHistory: AttendanceSummary[]) {
+  const today = { ...sourceToday };
+  if (state.status !== 'unknown') {
+    today.status = state.status;
+    today.syncState = state.syncState;
+    today.checkIn = sourceToday.checkIn ?? '07:54';
+    today.checkOut = state.checkOutCompleted ? '14:00' : sourceToday.checkOut;
+  }
+  const history = sourceHistory.map((row) => row.date === sourceToday.date && state.status !== 'unknown' ? { ...today } : { ...row });
+  return { today, history };
 }
 
 export function getManagerDashboard() {
@@ -67,6 +79,7 @@ export function simulateAttendanceEvent(currentStatus: AttendanceEventState, eve
   const checkOutEvent = eventType === 'check-out' || eventType === 'check-out-offline' || eventType === 'check-out-review';
   if (checkInEvent && checkedIn) throw new Error('cannot check in while already checked in');
   if (checkOutEvent && !checkedIn) throw new Error('cannot check out before checking in');
+  if (checkOutEvent && ['pending-sync', 'review-required'].includes(currentStatus.status)) throw new Error('cannot check out from pending or review status');
   if (checkOutEvent && currentStatus.checkOutCompleted) throw new Error('cannot check out twice');
   if (eventType === 'check-in-offline') return { status: 'pending-sync', syncState: 'queued' };
   if (eventType === 'check-in-review') return { status: 'review-required', syncState: 'synced' };
@@ -75,4 +88,14 @@ export function simulateAttendanceEvent(currentStatus: AttendanceEventState, eve
   if (eventType === 'sync') return { ...currentStatus, status: currentStatus.status === 'pending-sync' ? 'present' : currentStatus.status, syncState: 'synced' };
   if (eventType === 'check-in') return { status: 'present', syncState: 'synced' };
   return { status: 'present', syncState: 'synced', checkOutCompleted: true };
+}
+
+export function submitMemberAttendance(state: AttendanceEventState, scenario: AttendanceScenario) {
+  if (scenario === 'rejected') return { accepted: false as const, state, message: 'Presensi ditolak: di luar geofence simulasi.' };
+  if (scenario === 'completed') return { accepted: false as const, state, message: 'Presensi hari ini sudah selesai.' };
+  const checkedIn = state.status !== 'unknown' && state.status !== 'absent';
+  const event: AttendanceEvent = checkedIn
+    ? scenario === 'pending' ? 'check-out-offline' : scenario === 'accuracy' ? 'check-out-review' : 'check-out'
+    : scenario === 'pending' ? 'check-in-offline' : scenario === 'accuracy' ? 'check-in-review' : 'check-in';
+  return { accepted: true as const, state: simulateAttendanceEvent(state, event), message: null };
 }

@@ -6,7 +6,9 @@ import {
   getManagerDashboard,
   getMemberDashboard,
   getSuperadminOverview,
+  deriveMemberAttendanceDisplay,
   simulateAttendanceEvent,
+  submitMemberAttendance,
 } from './selectors.ts';
 import type { AttendanceEventState } from './types.ts';
 
@@ -172,4 +174,54 @@ test('applies transition guards to offline and review variants', () => {
     () => simulateAttendanceEvent({ status: 'present', syncState: 'synced' }, 'check-in-review'),
     /cannot check in/,
   );
+});
+
+test('projects simulated attendance into today and history without mutating fixtures', () => {
+  const member = getMemberDashboard();
+  const today = member.today!;
+  const display = deriveMemberAttendanceDisplay(
+    { status: 'pending-sync', syncState: 'queued' },
+    today,
+    member.history,
+  );
+
+  assert.equal(display.today.status, 'pending-sync');
+  assert.equal(display.today.checkIn, '07:54');
+  assert.equal(display.today.syncState, 'queued');
+  assert.equal(display.history[0].status, 'pending-sync');
+  assert.equal(today.checkIn, null);
+  assert.equal(today.status, 'unknown');
+});
+
+test('does not convert pending or review check-in to online checkout', () => {
+  assert.throws(
+    () => simulateAttendanceEvent({ status: 'pending-sync', syncState: 'queued' }, 'check-out'),
+    /pending or review/,
+  );
+  assert.throws(
+    () => simulateAttendanceEvent({ status: 'review-required', syncState: 'synced' }, 'check-out'),
+    /pending or review/,
+  );
+});
+
+test('runs successful member check-in and check-out through one workflow', () => {
+  const checkedIn = submitMemberAttendance({ status: 'unknown', syncState: 'idle' }, 'accepted');
+  assert.equal(checkedIn.accepted, true);
+  assert.deepEqual(checkedIn.state, { status: 'present', syncState: 'synced' });
+
+  const checkedOut = submitMemberAttendance(checkedIn.state, 'accepted');
+  assert.equal(checkedOut.accepted, true);
+  assert.deepEqual(checkedOut.state, { status: 'present', syncState: 'synced', checkOutCompleted: true });
+});
+
+test('preserves pending state and rejected submissions in member workflow', () => {
+  const pending = submitMemberAttendance({ status: 'unknown', syncState: 'idle' }, 'pending');
+  assert.deepEqual(pending.state, { status: 'pending-sync', syncState: 'queued' });
+  assert.throws(() => submitMemberAttendance(pending.state, 'accepted'), /pending or review/);
+
+  const source: AttendanceEventState = { status: 'unknown', syncState: 'idle' };
+  const rejected = submitMemberAttendance(source, 'rejected');
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.state, source);
+  assert.deepEqual(source, { status: 'unknown', syncState: 'idle' });
 });

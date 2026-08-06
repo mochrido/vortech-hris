@@ -37,3 +37,4 @@ export interface DemoData {
 
 export interface AttendanceEventState { status: AttendanceStatus; syncState: SyncState; checkOutCompleted?: boolean }
 export type AttendanceEvent = 'check-in' | 'check-in-offline' | 'check-in-review' | 'check-out' | 'check-out-offline' | 'check-out-review' | 'sync';
+export type AttendanceScenario = 'accepted' | 'pending' | 'accuracy' | 'rejected' | 'completed';
