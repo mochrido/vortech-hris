@@ -4,7 +4,7 @@ A locally runnable Next.js TypeScript project that will host the Member, Manager
 
 ## Local Startup
 
-Requirements: Node.js `>=20.9.0` and npm. This is the minimum required by the pinned Next.js `16.3.0` dependency.
+Requirements: Node.js `>=22.18.0` and npm. This baseline lets Node's built-in test runner discover and execute TypeScript tests without an external loader.
 
 ```bash
 npm install
@@ -23,7 +23,7 @@ npm run build
 npm run start
 ```
 
-`npm run lint` currently runs the TypeScript validation check because ESLint is deferred until application code exists. `npm test` uses Node's built-in test runner and currently discovers zero test files; demo boundary tests are added in Task 2.
+`npm run lint` currently runs the TypeScript validation check because ESLint is deferred until application code exists. `npm test` uses Node's built-in test runner with native TypeScript type stripping.
 
 ## Prototype Limits
 

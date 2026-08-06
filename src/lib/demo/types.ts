@@ -7,6 +7,7 @@ export type AttendanceStatus =
   | 'outside-geofence'
   | 'anomaly'
   | 'pending-sync'
+  | 'review-required'
   | 'unknown';
 export type SyncState = 'idle' | 'queued' | 'synced' | 'failed';
 

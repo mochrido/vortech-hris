@@ -41,6 +41,25 @@ test('exposes representative dashboard data through narrow selectors', () => {
   assert.ok(superadmin.featureFlags.some((flag) => flag.enabled === false));
 });
 
+test('scopes manager users and records to the assigned team', () => {
+  const manager = getManagerDashboard();
+  const teamUserKeys = new Set([manager.team.managerKey, ...manager.team.memberKeys]);
+
+  assert.deepEqual(manager.users.map((user) => user.key).sort(), [...teamUserKeys].sort());
+  assert.ok(manager.attendance.every((row) => teamUserKeys.has(row.userKey)));
+  assert.ok(manager.correctionRequests.every((request) => teamUserKeys.has(request.userKey)));
+  assert.ok(manager.attendance.some((row) => row.status === 'late'));
+  assert.ok(!manager.attendance.some((row) => row.userKey === 'user-dewi-pranoto'));
+});
+
+test('keeps correction requests date-consistent with their attendance event', () => {
+  const manager = getManagerDashboard();
+  const correction = manager.correctionRequests.find((request) => request.key === 'correction-bima-aug5');
+  const attendance = manager.attendance.find((row) => row.key === correction?.attendanceKey);
+
+  assert.equal(attendance?.date, '2026-08-05');
+});
+
 test('simulates attendance transitions without mutating the current status', () => {
   const current = { status: 'pending-sync' as const, syncState: 'queued' as const };
   const next = simulateAttendanceEvent(current, 'sync');
@@ -80,4 +99,31 @@ test('allows check-out after check-in', () => {
     status: 'present',
     syncState: 'synced',
   });
+});
+
+test('rejects duplicate check-in for every checked-in state', () => {
+  const checkedInStates: AttendanceEventState['status'][] = [
+    'present',
+    'late',
+    'outside-geofence',
+    'anomaly',
+    'pending-sync',
+    'review-required',
+  ];
+
+  for (const status of checkedInStates) {
+    assert.throws(
+      () => simulateAttendanceEvent({ status, syncState: 'synced' }, 'check-in'),
+      /cannot check in/,
+    );
+  }
+});
+
+test('rejects check-out before attendance starts', () => {
+  for (const status of ['unknown', 'absent'] as const) {
+    assert.throws(
+      () => simulateAttendanceEvent({ status, syncState: 'idle' }, 'check-out'),
+      /cannot check out/,
+    );
+  }
 });

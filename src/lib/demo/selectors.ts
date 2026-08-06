@@ -14,7 +14,15 @@ export function getMemberDashboard() {
 
 export function getManagerDashboard() {
   const context = getDemoContext('manager');
-  return { role: context.role, team: context.teams[0], users: context.users, attendance: context.attendance, correctionRequests: context.correctionRequests };
+  const team = context.teams[0];
+  const userKeys = new Set([team.managerKey, ...team.memberKeys]);
+  return {
+    role: context.role,
+    team,
+    users: context.users.filter((user) => userKeys.has(user.key)),
+    attendance: context.attendance.filter((row) => userKeys.has(row.userKey)),
+    correctionRequests: context.correctionRequests.filter((request) => userKeys.has(request.userKey)),
+  };
 }
 
 export function getAdminOverview() {
@@ -28,7 +36,9 @@ export function getSuperadminOverview() {
 }
 
 export function simulateAttendanceEvent(currentStatus: AttendanceEventState, eventType: AttendanceEvent): AttendanceEventState {
-  if (eventType === 'check-in' && currentStatus.status === 'present') throw new Error('cannot check in while already present');
+  const checkedIn = ['present', 'late', 'outside-geofence', 'anomaly', 'pending-sync', 'review-required'].includes(currentStatus.status);
+  if ((eventType === 'check-in' || eventType === 'check-in-offline') && checkedIn) throw new Error('cannot check in while already checked in');
+  if (eventType === 'check-out' && (currentStatus.status === 'unknown' || currentStatus.status === 'absent')) throw new Error('cannot check out before checking in');
   if (eventType === 'check-in-offline') return { status: 'pending-sync', syncState: 'queued' };
   if (eventType === 'sync') return { status: currentStatus.status === 'pending-sync' ? 'present' : currentStatus.status, syncState: 'synced' };
   if (eventType === 'check-in') return { status: 'present', syncState: 'synced' };

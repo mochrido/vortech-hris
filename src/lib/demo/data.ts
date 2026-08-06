@@ -25,12 +25,13 @@ export const demoData: DemoData = {
   attendance: [
     { key: 'attendance-sari-today', userKey: 'user-sari-utami', date: '2026-08-06', checkIn: '07:54', checkOut: null, status: 'present', locationKey: 'location-kantor-pusat', syncState: 'synced' },
     { key: 'attendance-bima-today', userKey: 'user-bima-santoso', date: '2026-08-06', checkIn: '08:19', checkOut: null, status: 'late', locationKey: 'location-kantor-pusat', syncState: 'synced' },
+    { key: 'attendance-bima-aug5', userKey: 'user-bima-santoso', date: '2026-08-05', checkIn: '08:03', checkOut: null, status: 'review-required', locationKey: 'location-kantor-pusat', syncState: 'synced', note: 'Koreksi check-out menunggu tinjauan' },
     { key: 'attendance-nadia-today', userKey: 'user-nadia-putri', date: '2026-08-06', checkIn: null, checkOut: null, status: 'absent', locationKey: null, syncState: 'idle' },
     { key: 'attendance-raka-today', userKey: 'user-raka-wijaya', date: '2026-08-06', checkIn: '08:02', checkOut: null, status: 'outside-geofence', locationKey: 'location-gudang-timur', syncState: 'failed', note: 'Jarak 342 m dari lokasi terdaftar' },
     { key: 'attendance-dewi-today', userKey: 'user-dewi-pranoto', date: '2026-08-06', checkIn: '08:01', checkOut: null, status: 'anomaly', locationKey: 'location-kantor-pusat', syncState: 'synced', note: 'Perangkat berbeda dari biasanya' },
     { key: 'attendance-sari-yesterday', userKey: 'user-sari-utami', date: '2026-08-05', checkIn: '08:05', checkOut: '17:03', status: 'pending-sync', locationKey: 'location-kantor-pusat', syncState: 'queued' },
   ],
-  correctionRequests: [{ key: 'correction-bima-aug5', attendanceKey: 'attendance-bima-today', userKey: 'user-bima-santoso', reason: 'Lupa melakukan check-out', status: 'review-required' }],
+  correctionRequests: [{ key: 'correction-bima-aug5', attendanceKey: 'attendance-bima-aug5', userKey: 'user-bima-santoso', reason: 'Lupa melakukan check-out', status: 'review-required' }],
   tenantSubscriptions: [{ key: 'subscription-nusantara', tenantKey: 'tenant-nusantara', plan: 'business', status: 'active', seats: 50, renewalDate: '2026-12-01' }],
   featureFlags: [
     { key: 'flag-offline-sync', name: 'Sinkronisasi offline', enabled: true, scope: 'tenant' },
