@@ -6,6 +6,7 @@ import { getDemoContextView } from "../lib/demo/selectors";
 import type { DemoRole } from "../lib/demo/types";
 import { SectionCard } from "./section-card";
 import { StatusBadge } from "./status-badge";
+import { MemberView } from "./member-view";
 
 const roles: { key: DemoRole; label: string }[] = [
   { key: "member", label: "Anggota" },
@@ -25,7 +26,7 @@ const roleCopy: Record<DemoRole, { eyebrow: string; title: string; description: 
   member: {
     eyebrow: "Ruang kerja personal",
     title: "Kehadiran hari ini",
-    description: "Alur presensi, riwayat, dan profil Anggota akan tersedia pada tahap berikutnya.",
+    description: "Tinjau alur presensi, riwayat tujuh hari, dan profil Anggota dengan data simulasi.",
   },
   manager: {
     eyebrow: "Ruang kerja tim",
@@ -118,7 +119,7 @@ export function DemoShell() {
             </fieldset>
           </section>
 
-          <div className="overview-grid">
+          {role === "member" ? <MemberView activeNav={activeNav} /> : <div className="overview-grid">
             <SectionCard eyebrow="Konteks aktif" title={activeNav}>
               <div className="placeholder-panel">
                 <span className="placeholder-panel__number">0{roles.findIndex((item) => item.key === role) + 1}</span>
@@ -137,7 +138,7 @@ export function DemoShell() {
                 <div><dt>Status</dt><dd><StatusBadge tone="success">Siap ditinjau</StatusBadge></dd></div>
               </dl>
             </SectionCard>
-          </div>
+          </div>}
         </main>
 
         <nav className="bottom-nav" aria-label="Navigasi utama seluler">
