@@ -2,9 +2,19 @@ import { demoData } from './data.ts';
 import type { AttendanceEvent, AttendanceEventState, DemoData, DemoRole } from './types.ts';
 
 const copy = <T>(value: T): T => structuredClone(value);
+type ReadonlyDemoData = { readonly [Key in keyof DemoData]: DeepReadonly<DemoData[Key]> };
+type DeepReadonly<T> = T extends (infer Item)[]
+  ? readonly DeepReadonly<Item>[]
+  : T extends object
+    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+    : T;
 
 export function getDemoContext(role: DemoRole): DemoData & { role: DemoRole } {
   return { ...copy(demoData), role };
+}
+
+export function getDemoContextView(role: DemoRole): ReadonlyDemoData & { role: DemoRole } {
+  return { ...demoData, role };
 }
 
 export function getMemberDashboard() {

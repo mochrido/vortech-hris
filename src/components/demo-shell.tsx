@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 
-import { getDemoContext } from "../lib/demo/selectors";
+import { getDemoContextView } from "../lib/demo/selectors";
 import type { DemoRole } from "../lib/demo/types";
 import { SectionCard } from "./section-card";
 import { StatusBadge } from "./status-badge";
 
 const roles: { key: DemoRole; label: string }[] = [
-  { key: "member", label: "Member" },
-  { key: "manager", label: "Manager" },
-  { key: "admin", label: "Admin" },
+  { key: "member", label: "Anggota" },
+  { key: "manager", label: "Manajer" },
+  { key: "admin", label: "Administrator" },
   { key: "superadmin", label: "Superadmin" },
 ];
 
@@ -25,7 +25,7 @@ const roleCopy: Record<DemoRole, { eyebrow: string; title: string; description: 
   member: {
     eyebrow: "Ruang kerja personal",
     title: "Kehadiran hari ini",
-    description: "Alur presensi, riwayat, dan profil Member akan tersedia pada tahap berikutnya.",
+    description: "Alur presensi, riwayat, dan profil Anggota akan tersedia pada tahap berikutnya.",
   },
   manager: {
     eyebrow: "Ruang kerja tim",
@@ -47,7 +47,7 @@ const roleCopy: Record<DemoRole, { eyebrow: string; title: string; description: 
 export function DemoShell() {
   const [role, setRole] = useState<DemoRole>("member");
   const [activeNav, setActiveNav] = useState(navigation.member[0]);
-  const context = getDemoContext(role);
+  const context = getDemoContextView(role);
   const currentUser = context.users.find((user) => user.role === role);
   const copy = roleCopy[role];
 
@@ -86,8 +86,12 @@ export function DemoShell() {
               {currentUser?.name ?? "Operator Platform Demo"} · {roles.find((item) => item.key === role)?.label}
             </span>
           </div>
-          <StatusBadge tone="warning">Demo Mode</StatusBadge>
+          <StatusBadge tone="warning">Mode Demo</StatusBadge>
         </header>
+
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          Pratinjau {roles.find((item) => item.key === role)?.label}, halaman {activeNav}.
+        </p>
 
         <main className="main-content">
           <section className="page-heading" aria-labelledby="page-title">
@@ -157,9 +161,9 @@ export function DemoShell() {
 
 function Brand() {
   return (
-    <div className="brand" aria-label="Vortech Hadir">
+    <a className="brand" href="/" aria-label="Vortech Hadir">
       <span className="brand__mark" aria-hidden="true">V</span>
       <span><strong>Vortech</strong><small>Hadir</small></span>
-    </div>
+    </a>
   );
 }

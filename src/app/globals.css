@@ -27,11 +27,9 @@
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-* { box-sizing: border-box; }
+.demo-shell, .demo-shell * { box-sizing: border-box; }
 
-html { background: var(--canvas); }
-
-body {
+.app-body {
   margin: 0;
   background:
     radial-gradient(circle at 85% 0%, rgba(184, 76, 43, 0.09), transparent 28rem),
@@ -40,23 +38,23 @@ body {
   min-width: 320px;
 }
 
-button, input, select, textarea { font: inherit; }
+.demo-shell button, .demo-shell input, .demo-shell select, .demo-shell textarea { font: inherit; }
 
-button { min-height: 44px; }
+.demo-shell button { min-height: 44px; }
 
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+.demo-shell button:focus-visible, .demo-shell a:focus-visible, .demo-shell input:focus-visible, .demo-shell select:focus-visible, .demo-shell textarea:focus-visible {
   outline: 3px solid rgba(184, 76, 43, 0.42);
   outline-offset: 3px;
 }
 
-h1, h2, p { margin-top: 0; }
-h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(2rem, 4vw, 3.75rem); line-height: 1; letter-spacing: -0.045em; margin-bottom: var(--space-3); }
-h2 { font-size: 1.1rem; margin-bottom: 0; }
-p { color: var(--muted); line-height: 1.65; }
+.demo-shell h1, .demo-shell h2, .demo-shell p { margin-top: 0; }
+.demo-shell h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(2rem, 4vw, 3.75rem); line-height: 1; letter-spacing: -0.045em; margin-bottom: var(--space-3); }
+.demo-shell h2 { font-size: 1.1rem; margin-bottom: 0; }
+.demo-shell p { color: var(--muted); line-height: 1.65; }
 
 .demo-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
 .sidebar { background: #282a25; color: #f8f2e8; display: flex; flex-direction: column; padding: var(--space-5) var(--space-4); position: sticky; top: 0; height: 100vh; }
-.brand { align-items: center; color: inherit; display: flex; gap: 0.75rem; min-height: 44px; }
+.brand { align-items: center; color: inherit; display: flex; gap: 0.75rem; min-height: 44px; text-decoration: none; }
 .brand__mark { align-items: center; background: var(--accent); border-radius: 12px 5px 12px 5px; color: white; display: flex; font-family: Georgia, serif; font-size: 1.25rem; font-weight: 700; height: 40px; justify-content: center; transform: rotate(-2deg); width: 40px; }
 .brand strong, .brand small { display: block; }
 .brand strong { font-size: 1.05rem; letter-spacing: 0.01em; }
@@ -111,9 +109,10 @@ p { color: var(--muted); line-height: 1.65; }
 .context-list dd { font-size: 0.83rem; font-weight: 700; margin: 0; max-width: 65%; overflow-wrap: anywhere; text-align: right; }
 .bottom-nav { display: none; }
 
-table { border-collapse: collapse; width: 100%; }
-th, td { border-bottom: 1px solid var(--border); padding: 0.85rem; text-align: left; }
-th { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.demo-shell table { border-collapse: collapse; width: 100%; }
+.demo-shell th, .demo-shell td { border-bottom: 1px solid var(--border); padding: 0.85rem; text-align: left; }
+.demo-shell th { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.sr-only { height: 1px; margin: -1px; overflow: hidden; padding: 0; position: absolute; width: 1px; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 @media (max-width: 900px) {
   .demo-shell { display: block; }
@@ -145,5 +144,5 @@ th { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.08em; text-trans
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+  .demo-shell *, .demo-shell *::before, .demo-shell *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
