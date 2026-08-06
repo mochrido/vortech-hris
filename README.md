@@ -1,26 +1,29 @@
 # Attendance Management Prototype
 
-A locally runnable Next.js TypeScript prototype for reviewing the Member, Manager, Admin, and Superadmin attendance-management experiences.
+A locally runnable Next.js TypeScript project that will host the Member, Manager, Admin, and Superadmin attendance-management previews.
 
 ## Local Startup
 
-Requirements: Node.js LTS and npm.
+Requirements: Node.js `>=20.9.0` and npm. This is the minimum required by the pinned Next.js `16.3.0` dependency.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` after the development server starts. The available role previews are Member, Manager, Admin, and Superadmin.
+Open `http://localhost:3000` after the development server starts. The app entry point is intentionally minimal in Task 1; the role previews are added in later tasks.
 
 Useful checks:
 
 ```bash
 npm test
 npm run lint
+npm run typecheck
 npm run build
 npm run start
 ```
+
+`npm run lint` currently runs the TypeScript validation check because ESLint is deferred until application code exists. `npm test` uses Node's built-in test runner and currently discovers zero test files; demo boundary tests are added in Task 2.
 
 ## Prototype Limits
 
