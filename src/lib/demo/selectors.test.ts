@@ -8,6 +8,7 @@ import {
   getSuperadminOverview,
   simulateAttendanceEvent,
 } from './selectors.ts';
+import type { AttendanceEventState } from './types.ts';
 
 test('returns deterministic role contexts with stable internal keys', () => {
   const member = getDemoContext('member');
@@ -58,4 +59,25 @@ test('simulates offline check-in and rejects unsupported transitions', () => {
     () => simulateAttendanceEvent({ status: 'present', syncState: 'synced' }, 'check-in'),
     /cannot check in/,
   );
+});
+
+test('returns a new state for successful check-in without changing its source fixture', () => {
+  const sourceFixture: AttendanceEventState = { status: 'unknown', syncState: 'idle' };
+  const simulated = simulateAttendanceEvent(sourceFixture, 'check-in');
+
+  assert.deepEqual(sourceFixture, { status: 'unknown', syncState: 'idle' });
+  assert.deepEqual(simulated, { status: 'present', syncState: 'synced' });
+  assert.notEqual(simulated, sourceFixture);
+});
+
+test('allows check-out after check-in', () => {
+  const afterCheckIn = simulateAttendanceEvent(
+    { status: 'unknown', syncState: 'idle' },
+    'check-in',
+  );
+
+  assert.deepEqual(simulateAttendanceEvent(afterCheckIn, 'check-out'), {
+    status: 'present',
+    syncState: 'synced',
+  });
 });
