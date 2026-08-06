@@ -41,6 +41,7 @@ export function MemberView({ activeNav }: MemberViewProps) {
   const [emptyProfile, setEmptyProfile] = useState(false);
   const openerRef = useRef<HTMLButtonElement>(null);
   const checkedIn = eventState.status !== "unknown" && eventState.status !== "absent" && !completed;
+  const transitionLocked = completed || eventState.checkOutCompleted === true;
   const pendingCount = dashboard.syncState.pendingCount + (eventState.syncState === "queued" ? 1 : 0);
 
   function openCapture() {
@@ -59,13 +60,15 @@ export function MemberView({ activeNav }: MemberViewProps) {
   function confirmPhoto() { setPhotoConfirmed(true); }
 
   function submitAttendance() {
-    if (completed) return;
+    if (transitionLocked) return;
     if (scenario === "rejected") { setError("Presensi ditolak: di luar geofence simulasi."); return; }
-    if (scenario === "accuracy") { setError("Presensi ditahan untuk tinjauan karena akurasi GPS simulasi rendah."); return; }
     try {
-      const next = simulateAttendanceEvent(eventState, checkedIn ? "check-out" : scenario === "pending" ? "check-in-offline" : "check-in");
+      const next = simulateAttendanceEvent(eventState, checkedIn
+        ? scenario === "pending" ? "check-out-offline" : scenario === "accuracy" ? "check-out-review" : "check-out"
+        : scenario === "pending" ? "check-in-offline" : scenario === "accuracy" ? "check-in-review" : "check-in");
       setEventState(next);
-      if (checkedIn) setCompleted(true);
+      if (checkedIn && scenario !== "pending" && scenario !== "accuracy") setCompleted(true);
+      if (next.status === "review-required") setError("Presensi diterima untuk tinjauan. Status review-required tersimpan dalam simulasi.");
       closeCapture();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Presensi simulasi gagal.");
@@ -73,21 +76,21 @@ export function MemberView({ activeNav }: MemberViewProps) {
   }
 
   function selectScenario(next: Scenario) {
-    if (!completed) { setScenario(next); setCompleted(next === "completed"); setError(""); }
+    if (!transitionLocked) { setScenario(next); setCompleted(next === "completed"); setError(""); }
   }
 
   if (activeNav === "Riwayat") return <HistoryPanel dashboard={dashboard} empty={emptyHistory} onToggleEmpty={() => setEmptyHistory((value) => !value)} />;
   if (activeNav === "Profil") return <ProfilePanel user={dashboard.user} pendingCount={pendingCount} empty={emptyProfile} onToggleEmpty={() => setEmptyProfile((value) => !value)} />;
 
   const selectedMetadata = metadata[scenario];
-  const actionLabel = completed ? "Presensi hari ini selesai" : checkedIn ? "Check-out sekarang" : "Check-in sekarang";
+  const actionLabel = transitionLocked ? "Presensi hari ini selesai" : checkedIn ? "Check-out sekarang" : "Check-in sekarang";
   return (
     <div className="member-view" aria-busy={loading}>
-      <section className="member-hero" aria-labelledby="member-title"><div><p className="eyebrow">Kamis, 6 Agustus 2026</p><h1 id="member-title">Selamat pagi, {dashboard.user.name.split(" ")[0]}.</h1><p>Shift Pagi <strong>06:00–14:00</strong> · Operasional</p></div><StatusBadge tone={scenario === "rejected" ? "danger" : scenario === "pending" ? "warning" : "success"}>{completed ? "Sudah selesai" : scenario === "pending" ? "Menunggu sinkron" : scenario === "rejected" ? "Perlu perhatian" : checkedIn ? "Sudah check-in" : "Belum check-in"}</StatusBadge></section>
-      <section className="member-attendance-card" aria-label="Presensi hari ini"><div className="member-attendance-card__top"><span>Presensi hari ini</span><span className="member-time">{dashboard.today?.checkIn ?? "--:--"}</span></div><div className="member-location"><span className="location-dot" aria-hidden="true" /><span><strong>Kantor Pusat</strong><small>GPS simulasi · {selectedMetadata.accuracy} · {selectedMetadata.geofence.toLowerCase()}</small></span></div><button className="member-primary-action" disabled={completed || loading} onClick={() => { openerRef.current = document.activeElement as HTMLButtonElement; openCapture(); }} ref={openerRef} type="button">{actionLabel}</button><p className="member-explanation">Foto dan lokasi hanya ditampilkan sebagai simulasi. Tidak ada kamera, GPS, atau data perangkat yang diakses.</p></section>
+      <section className="member-hero" aria-labelledby="member-title"><div><p className="eyebrow">Kamis, 6 Agustus 2026</p><h1 id="member-title">Selamat pagi, {dashboard.user.name.split(" ")[0]}.</h1><p>Shift Pagi <strong>06:00–14:00</strong> · Operasional</p></div><StatusBadge tone={scenario === "rejected" ? "danger" : scenario === "pending" || eventState.status === "review-required" ? "warning" : "success"}>{completed ? "Sudah selesai" : eventState.status === "review-required" ? "Menunggu tinjauan" : scenario === "pending" ? "Menunggu sinkron" : scenario === "rejected" ? "Perlu perhatian" : checkedIn ? "Sudah check-in" : "Belum check-in"}</StatusBadge></section>
+      <section className="member-attendance-card" aria-label="Presensi hari ini"><div className="member-attendance-card__top"><span>Presensi hari ini</span><span className="member-time">{dashboard.today?.checkIn ?? "--:--"}</span></div><div className="member-location"><span className="location-dot" aria-hidden="true" /><span><strong>Kantor Pusat</strong><small>GPS simulasi · {selectedMetadata.accuracy} · {selectedMetadata.geofence.toLowerCase()}</small></span></div><button className="member-primary-action" disabled={transitionLocked || loading} onClick={() => { openerRef.current = document.activeElement as HTMLButtonElement; openCapture(); }} ref={openerRef} type="button">{actionLabel}</button><p className="member-explanation">Foto dan lokasi hanya ditampilkan sebagai simulasi. Tidak ada kamera, GPS, atau data perangkat yang diakses.</p></section>
       <div className="member-notice"><span aria-hidden="true">↻</span><span><strong>{pendingCount} data menunggu sinkronisasi</strong><small>Mode offline aktif · data simulasi pending tetap terlihat</small></span></div>
       {error ? <div className="member-error" role="alert"><strong>Perlu perhatian</strong><span>{error}</span></div> : null}
-      <section className="member-section" aria-labelledby="scenario-title"><div className="member-section-heading"><div><p className="eyebrow">Ruang uji</p><h2 id="scenario-title">Skenario simulasi</h2></div><span className="member-demo-label">MOCK ONLY</span></div><p className="member-muted">Pilihan mengubah metadata capture dan perilaku kirim, tanpa izin perangkat.</p><div className="scenario-list">{scenarios.map((item) => <button className={`scenario-button ${scenario === item.key ? "is-active" : ""}`} disabled={completed && item.key !== "completed"} key={item.key} onClick={() => selectScenario(item.key)} type="button"><StatusBadge tone={item.tone}>{item.label}</StatusBadge><span aria-hidden="true">›</span></button>)}</div><p className="scenario-description" aria-live="polite">{selectedMetadata.note}</p></section>
+      <section className="member-section" aria-labelledby="scenario-title"><div className="member-section-heading"><div><p className="eyebrow">Ruang uji</p><h2 id="scenario-title">Skenario simulasi</h2></div><span className="member-demo-label">MOCK ONLY</span></div><p className="member-muted">Pilihan mengubah metadata capture dan perilaku kirim, tanpa izin perangkat.</p><div className="scenario-list">{scenarios.map((item) => <button className={`scenario-button ${scenario === item.key ? "is-active" : ""}`} disabled={transitionLocked && item.key !== "completed"} key={item.key} onClick={() => selectScenario(item.key)} type="button"><StatusBadge tone={item.tone}>{item.label}</StatusBadge><span aria-hidden="true">›</span></button>)}</div><p className="scenario-description" aria-live="polite">{selectedMetadata.note}</p></section>
       <div className="member-metrics"><Metric value={`${Math.floor(dashboard.monthlySummary.workedMinutes / 60)}j ${dashboard.monthlySummary.workedMinutes % 60}m`} label="Total bekerja bulan ini" /><Metric value={`${dashboard.monthlySummary.lateCount}`} label="Terlambat bulan ini" /><Metric value={`${pendingCount}`} label="Pending sinkronisasi" /></div>
       <div className="member-demo-actions"><button className="button-secondary member-reload" disabled={loading} onClick={() => { setLoading(true); window.setTimeout(() => { setEventState({ status: "unknown", syncState: "idle" }); setCompleted(false); setScenario("accepted"); setError(""); setLoading(false); }, 500); }} type="button">{loading ? "Memuat contoh..." : "Muat ulang data demo"}</button><button className="button-secondary" onClick={() => setError("Contoh gangguan umum: data demo tidak dapat diproses. Coba lagi.")} type="button">Contoh galat umum</button></div>
       {captureOpen ? <CapturePanel checkedIn={checkedIn} confirmed={photoConfirmed} data={selectedMetadata} photoVersion={photoVersion} onConfirm={confirmPhoto} onRetake={() => { setPhotoVersion((value) => value + 1); setPhotoConfirmed(false); }} onCancel={closeCapture} onSubmit={submitAttendance} /> : null}

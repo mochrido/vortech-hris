@@ -108,6 +108,7 @@ test('allows check-out after check-in', () => {
   assert.deepEqual(simulateAttendanceEvent(afterCheckIn, 'check-out'), {
     status: 'present',
     syncState: 'synced',
+    checkOutCompleted: true,
   });
 });
 
@@ -136,4 +137,39 @@ test('rejects check-out before attendance starts', () => {
       /cannot check out/,
     );
   }
+});
+
+test('accepts low-accuracy review transitions without falsely syncing them', () => {
+  assert.deepEqual(
+    simulateAttendanceEvent({ status: 'unknown', syncState: 'idle' }, 'check-in-review'),
+    { status: 'review-required', syncState: 'synced' },
+  );
+  assert.deepEqual(
+    simulateAttendanceEvent({ status: 'present', syncState: 'synced' }, 'check-out-review'),
+    { status: 'review-required', syncState: 'synced', checkOutCompleted: true },
+  );
+});
+
+test('keeps offline check-out pending and rejects duplicate check-out', () => {
+  assert.deepEqual(
+    simulateAttendanceEvent({ status: 'present', syncState: 'synced' }, 'check-out-offline'),
+    { status: 'pending-sync', syncState: 'queued', checkOutCompleted: true },
+  );
+  assert.throws(
+    () => simulateAttendanceEvent({ status: 'present', syncState: 'synced', checkOutCompleted: true }, 'check-out'),
+    /cannot check out twice/,
+  );
+});
+
+test('applies transition guards to offline and review variants', () => {
+  for (const event of ['check-out-offline', 'check-out-review'] as const) {
+    assert.throws(
+      () => simulateAttendanceEvent({ status: 'unknown', syncState: 'idle' }, event),
+      /cannot check out before checking in/,
+    );
+  }
+  assert.throws(
+    () => simulateAttendanceEvent({ status: 'present', syncState: 'synced' }, 'check-in-review'),
+    /cannot check in/,
+  );
 });

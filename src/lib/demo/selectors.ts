@@ -63,10 +63,16 @@ export function getSuperadminOverview() {
 
 export function simulateAttendanceEvent(currentStatus: AttendanceEventState, eventType: AttendanceEvent): AttendanceEventState {
   const checkedIn = ['present', 'late', 'outside-geofence', 'anomaly', 'pending-sync', 'review-required'].includes(currentStatus.status);
-  if ((eventType === 'check-in' || eventType === 'check-in-offline') && checkedIn) throw new Error('cannot check in while already checked in');
-  if (eventType === 'check-out' && (currentStatus.status === 'unknown' || currentStatus.status === 'absent')) throw new Error('cannot check out before checking in');
+  const checkInEvent = eventType === 'check-in' || eventType === 'check-in-offline' || eventType === 'check-in-review';
+  const checkOutEvent = eventType === 'check-out' || eventType === 'check-out-offline' || eventType === 'check-out-review';
+  if (checkInEvent && checkedIn) throw new Error('cannot check in while already checked in');
+  if (checkOutEvent && !checkedIn) throw new Error('cannot check out before checking in');
+  if (checkOutEvent && currentStatus.checkOutCompleted) throw new Error('cannot check out twice');
   if (eventType === 'check-in-offline') return { status: 'pending-sync', syncState: 'queued' };
-  if (eventType === 'sync') return { status: currentStatus.status === 'pending-sync' ? 'present' : currentStatus.status, syncState: 'synced' };
+  if (eventType === 'check-in-review') return { status: 'review-required', syncState: 'synced' };
+  if (eventType === 'check-out-offline') return { status: 'pending-sync', syncState: 'queued', checkOutCompleted: true };
+  if (eventType === 'check-out-review') return { status: 'review-required', syncState: 'synced', checkOutCompleted: true };
+  if (eventType === 'sync') return { ...currentStatus, status: currentStatus.status === 'pending-sync' ? 'present' : currentStatus.status, syncState: 'synced' };
   if (eventType === 'check-in') return { status: 'present', syncState: 'synced' };
-  return { status: currentStatus.status, syncState: 'synced' };
+  return { status: 'present', syncState: 'synced', checkOutCompleted: true };
 }
