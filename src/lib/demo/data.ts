@@ -35,9 +35,19 @@ export const demoData: DemoData = {
     { key: 'attendance-sari-aug2', userKey: 'user-sari-utami', date: '2026-08-02', checkIn: '08:00', checkOut: '17:00', status: 'present', locationKey: 'location-kantor-pusat', syncState: 'synced' },
     { key: 'attendance-sari-aug1', userKey: 'user-sari-utami', date: '2026-08-01', checkIn: '08:00', checkOut: '17:00', status: 'present', locationKey: 'location-kantor-pusat', syncState: 'synced' },
     { key: 'attendance-sari-jul31', userKey: 'user-sari-utami', date: '2026-07-31', checkIn: '08:00', checkOut: '17:00', status: 'present', locationKey: 'location-kantor-pusat', syncState: 'synced' },
+    { key: 'attendance-raka-aug5', userKey: 'user-raka-wijaya', date: '2026-08-05', checkIn: '08:07', checkOut: '16:58', status: 'present', locationKey: 'location-kantor-pusat', syncState: 'synced' },
+    { key: 'attendance-bima-aug6b', userKey: 'user-bima-santoso', date: '2026-08-06', checkIn: '08:19', checkOut: null, status: 'pending-sync', locationKey: 'location-kantor-pusat', syncState: 'queued', note: 'Check-out 17:04 tercatat saat offline' },
   ],
-  correctionRequests: [{ key: 'correction-bima-aug5', attendanceKey: 'attendance-bima-aug5', userKey: 'user-bima-santoso', reason: 'Lupa melakukan check-out', status: 'review-required' }],
-  tenantSubscriptions: [{ key: 'subscription-nusantara', tenantKey: 'tenant-nusantara', plan: 'business', status: 'active', seats: 50, renewalDate: '2026-12-01' }],
+  correctionRequests: [
+    { key: 'correction-bima-aug5', attendanceKey: 'attendance-bima-aug5', userKey: 'user-bima-santoso', reason: 'Lupa melakukan check-out', status: 'review-required' },
+    { key: 'correction-raka-aug5', attendanceKey: 'attendance-raka-aug5', userKey: 'user-raka-wijaya', reason: 'Salah pilih lokasi saat check-in', status: 'review-required' },
+  ],
+  tenantSubscriptions: [
+    { key: 'subscription-nusantara', tenantKey: 'tenant-nusantara', tenantName: 'PT Langkah Nusantara', plan: 'business', status: 'active', seats: 50, renewalDate: '2026-12-01' },
+    { key: 'subscription-mekar', tenantKey: 'tenant-mekar', tenantName: 'CV Mekar Sentosa', plan: 'starter', status: 'trial', seats: 10, renewalDate: '2026-08-20' },
+    { key: 'subscription-cakra', tenantKey: 'tenant-cakra', tenantName: 'PT Cakra Buana', plan: 'business', status: 'past-due', seats: 80, renewalDate: '2026-08-01' },
+    { key: 'subscription-delta', tenantKey: 'tenant-delta', tenantName: 'PT Delta Kreasi', plan: 'enterprise', status: 'suspended', seats: 200, renewalDate: '2026-10-15' },
+  ],
   featureFlags: [
     { key: 'flag-offline-sync', name: 'Sinkronisasi offline', enabled: true, scope: 'tenant' },
     { key: 'flag-camera-proof', name: 'Bukti foto', enabled: false, scope: 'tenant' },

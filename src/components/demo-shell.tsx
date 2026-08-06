@@ -4,9 +4,11 @@ import { useState } from "react";
 
 import { getDemoContextView } from "../lib/demo/selectors";
 import type { DemoRole } from "../lib/demo/types";
-import { SectionCard } from "./section-card";
 import { StatusBadge } from "./status-badge";
 import { MemberView } from "./member-view";
+import { ManagerView } from "./manager-view";
+import { AdminView } from "./admin-view";
+import { SuperadminView } from "./superadmin-view";
 
 const roles: { key: DemoRole; label: string }[] = [
   { key: "member", label: "Anggota" },
@@ -18,7 +20,7 @@ const roles: { key: DemoRole; label: string }[] = [
 const navigation: Record<DemoRole, string[]> = {
   member: ["Beranda", "Riwayat", "Profil"],
   manager: ["Ringkasan", "Tim", "Koreksi"],
-  admin: ["Ringkasan", "Pengguna", "Lokasi"],
+  admin: ["Ringkasan", "Pengguna", "Tim", "Lokasi", "Jadwal", "Kebijakan", "Merek", "Laporan"],
   superadmin: ["Ringkasan", "Tenant", "Platform"],
 };
 
@@ -31,17 +33,17 @@ const roleCopy: Record<DemoRole, { eyebrow: string; title: string; description: 
   manager: {
     eyebrow: "Ruang kerja tim",
     title: "Operasional tim",
-    description: "Ringkasan kehadiran tim dan peninjauan koreksi akan tersedia pada tahap berikutnya.",
+    description: "Pantau kehadiran tim, indikator geofence, dan koreksi yang menunggu keputusan dengan data simulasi.",
   },
   admin: {
     eyebrow: "Ruang kerja organisasi",
     title: "Administrasi perusahaan",
-    description: "Pengelolaan pengguna, lokasi, jadwal, dan kebijakan akan tersedia pada tahap berikutnya.",
+    description: "Kelola contoh pengguna, tim, lokasi, jadwal, kebijakan, merek, dan laporan dengan data simulasi.",
   },
   superadmin: {
     eyebrow: "Ruang kerja platform",
     title: "Operasional platform",
-    description: "Pengelolaan tenant, langganan, dan fitur platform akan tersedia pada tahap berikutnya.",
+    description: "Tinjau contoh tenant, status langganan, akses fitur, dan pengaturan platform dengan data simulasi.",
   },
 };
 
@@ -119,26 +121,10 @@ export function DemoShell() {
             </fieldset>
           </section>
 
-          {role === "member" ? <MemberView activeNav={activeNav} /> : <div className="overview-grid">
-            <SectionCard eyebrow="Konteks aktif" title={activeNav}>
-              <div className="placeholder-panel">
-                <span className="placeholder-panel__number">0{roles.findIndex((item) => item.key === role) + 1}</span>
-                <div>
-                  <strong>Area pratinjau {roles.find((item) => item.key === role)?.label}</strong>
-                  <p>Konten dashboard belum diaktifkan. Gunakan navigasi untuk meninjau struktur shell.</p>
-                </div>
-              </div>
-            </SectionCard>
-
-            <SectionCard eyebrow="Lingkungan" title="Konteks demo" className="context-card">
-              <dl className="context-list">
-                <div><dt>Tenant</dt><dd>{context.tenant.name}</dd></div>
-                <div><dt>Zona waktu</dt><dd>{context.tenant.timezone}</dd></div>
-                <div><dt>Pengguna</dt><dd>{currentUser?.email ?? "platform@demo.local"}</dd></div>
-                <div><dt>Status</dt><dd><StatusBadge tone="success">Siap ditinjau</StatusBadge></dd></div>
-              </dl>
-            </SectionCard>
-          </div>}
+          {role === "member" ? <MemberView activeNav={activeNav} /> : null}
+          {role === "manager" ? <ManagerView activeNav={activeNav} /> : null}
+          {role === "admin" ? <AdminView activeNav={activeNav} /> : null}
+          {role === "superadmin" ? <SuperadminView activeNav={activeNav} /> : null}
         </main>
 
         <nav className="bottom-nav" aria-label="Navigasi utama seluler">

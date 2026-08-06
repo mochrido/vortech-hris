@@ -18,7 +18,7 @@ export interface Location { key: string; name: string; address: string; latitude
 export interface Schedule { key: string; name: string; startTime: string; endTime: string; workDays: number[] }
 export interface AttendanceSummary { key: string; userKey: string; date: string; checkIn: string | null; checkOut: string | null; status: AttendanceStatus; locationKey: string | null; syncState: SyncState; note?: string }
 export interface CorrectionRequest { key: string; attendanceKey: string; userKey: string; reason: string; status: 'review-required' | 'approved' | 'rejected' }
-export interface TenantSubscription { key: string; tenantKey: string; plan: 'starter' | 'business' | 'enterprise'; status: 'trial' | 'active' | 'past-due'; seats: number; renewalDate: string }
+export interface TenantSubscription { key: string; tenantKey: string; tenantName: string; plan: 'starter' | 'business' | 'enterprise'; status: 'trial' | 'active' | 'past-due' | 'suspended'; seats: number; renewalDate: string }
 export interface FeatureFlag { key: string; name: string; enabled: boolean; scope: 'tenant' | 'platform' }
 export interface UiSyncState { online: boolean; pendingCount: number; lastSyncedAt: string | null; message: string }
 
