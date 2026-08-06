@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
+import "./globals.css";
+
 export const metadata: Metadata = {
-  title: "Attendance Management Prototype",
-  description: "Mock-only attendance management UI prototype",
+  title: "Vortech Hadir | Prototipe Manajemen Kehadiran",
+  description: "Pratinjau antarmuka manajemen kehadiran untuk tim Indonesia.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
