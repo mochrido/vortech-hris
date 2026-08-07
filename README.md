@@ -1,6 +1,6 @@
 # Attendance Management Prototype
 
-A locally runnable Next.js TypeScript project that will host the Member, Manager, Admin, and Superadmin attendance-management previews.
+A locally runnable Next.js TypeScript project that hosts the Member, Manager, Admin, and Superadmin attendance-management previews.
 
 ## Local Startup
 
@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` after the development server starts. The app entry point is intentionally minimal in Task 1; the role previews are added in later tasks.
+Open `http://localhost:3000` after the development server starts. Use the "Pratinjau sebagai" (Preview as) switcher to move between the four role previews: Member (Anggota), Manager (Manajer), Admin (Administrator), and Superadmin. Each role renders from the same in-memory demo dataset.
 
 Useful checks:
 
