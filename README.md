@@ -89,8 +89,8 @@ docker compose --profile jobs run --rm jobs
 
 `npm run backup` runs `pg_dump` (custom format, compressed) from `DATABASE_URL` into a timestamped archive under `BACKUP_DIR` (default `./backups`, git-ignored) and prints the archive path.
 
-- **Encrypted (recommended):** set `BACKUP_PASSPHRASE`. The archive is encrypted with `openssl` AES-256-CBC + PBKDF2 to `<name>.pg.dump.enc`, and the plaintext copy is removed. Keep the passphrase somewhere safe **off** the host.
-- **Unencrypted:** if `BACKUP_PASSPHRASE` is unset, the script warns that the archive is unencrypted and must be moved off-VPS immediately.
+- **Encrypted (recommended):** set a strong, unique `BACKUP_PASSPHRASE` in your `.env` to enable encryption. The archive is encrypted with `openssl` AES-256-CBC + PBKDF2 to `<name>.pg.dump.enc`, and the plaintext copy is removed. Keep the passphrase somewhere safe **off** the host.
+- **Unencrypted (default):** `BACKUP_PASSPHRASE` is commented out in `.env.example`, so by default the script warns loudly that the archive is unencrypted and must be moved off-VPS immediately.
 
 > **A backup on the same VPS is not a backup (PRD 15).** After each nightly backup, copy the archive (and the private selfie volume) to a location **outside** the VPS — e.g. object storage or another host. Automate the copy as part of the nightly job; that off-VPS step is an operational requirement, not handled by this script.
 

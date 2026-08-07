@@ -9,12 +9,25 @@ services:
       - .env
     environment:
       # Override the DB host to reach the in-compose Postgres service.
-      DATABASE_URL: postgresql://${POSTGRES_USER:-vortech}:${POSTGRES_PASSWORD:-vortech}@postgres:5432/${POSTGRES_DB:-vortech}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vortech}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-vortech}
     depends_on:
       postgres:
         condition: service_healthy
     expose:
       - "3000"
+    healthcheck:
+      # node:22-alpine ships no curl/wget; use the Node runtime's global fetch.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then((r)=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - internal
 
@@ -23,7 +36,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vortech}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vortech}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-vortech}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -47,7 +60,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - web
+      web:
+        condition: service_healthy
     networks:
       - internal
 
@@ -62,7 +76,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-vortech}:${POSTGRES_PASSWORD:-vortech}@postgres:5432/${POSTGRES_DB:-vortech}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vortech}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-vortech}
     depends_on:
       postgres:
         condition: service_healthy
