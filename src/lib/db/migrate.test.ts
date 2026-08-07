@@ -21,7 +21,14 @@ test('runMigrations creates schema_migrations, applies pending migrations once, 
   const first = await runMigrations(pool, migrationsDir);
   assert.deepEqual(
     first,
-    ['0001_core_identity', '0002_auth', '0003_subscription_branding'],
+    [
+      '0001_core_identity',
+      '0002_auth',
+      '0003_subscription_branding',
+      '0004_locations_schedules',
+      '0005_attendance',
+      '0006_files_jobs',
+    ],
     'expected all migrations to be applied in filename order',
   );
 
@@ -40,5 +47,8 @@ test('runMigrations creates schema_migrations, applies pending migrations once, 
     '0001_core_identity',
     '0002_auth',
     '0003_subscription_branding',
+    '0004_locations_schedules',
+    '0005_attendance',
+    '0006_files_jobs',
   ]);
 });
