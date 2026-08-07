@@ -7,6 +7,7 @@ import { createTestDatabase, dropTestDatabase } from '../test/db.ts';
 import { loadEnvFile } from '../test/env.ts';
 import { runMigrations } from '../db/migrate.ts';
 import { runSeed } from './seed.ts';
+import { decryptTotpSecret } from '../auth/totp.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const migrationsDir = path.join(repoRoot, 'migrations');
@@ -71,6 +72,44 @@ test('seed: creates superadmin with TOTP, demo tenant with users/locations/sched
       WHERE tc.confirmed_at IS NOT NULL`,
   );
   assert.equal(confirmedTotp, 1, 'expected superadmin to have a confirmed TOTP credential');
+
+  // --- At-rest encryption: seeded credentials must NOT be stored as plaintext ---
+
+  // (a) Every seeded user's password_hash is a scrypt hash, not plaintext.
+  const passwordHashes = await pool.query<{ password_hash: string }>(`SELECT password_hash FROM users`);
+  assert.ok(passwordHashes.rows.length > 0, 'expected seeded users to exist');
+  for (const row of passwordHashes.rows) {
+    assert.ok(
+      row.password_hash.startsWith('scrypt$'),
+      `password_hash must be a scrypt hash, not plaintext: ${row.password_hash.slice(0, 24)}...`,
+    );
+  }
+
+  // (b) The superadmin's stored TOTP secret is AES-256-GCM ciphertext, not the
+  // plaintext base32 secret, and round-trips back to a valid base32 secret via
+  // decryptTotpSecret under TOTP_ENCRYPTION_KEY.
+  const superadminTotp = await pool.query<{ encrypted_secret: string }>(
+    `SELECT tc.encrypted_secret
+       FROM totp_credentials tc
+       JOIN user_roles r ON r.user_id = tc.user_id AND r.role = 'superadmin'`,
+  );
+  assert.equal(superadminTotp.rows.length, 1, 'expected exactly one superadmin TOTP credential');
+  const encryptedSecret = superadminTotp.rows[0].encrypted_secret;
+
+  // A plaintext base32 secret would be stored verbatim; ciphertext is base64 of
+  // [IV|tag|ciphertext] and must not decode back to the raw base32 secret.
+  assert.notEqual(
+    encryptedSecret,
+    decryptTotpSecret(encryptedSecret),
+    'encrypted_secret must not equal its decrypted plaintext (stored value must be ciphertext)',
+  );
+
+  const decrypted = decryptTotpSecret(encryptedSecret);
+  assert.match(
+    decrypted,
+    /^[A-Z2-7]+$/,
+    'decrypted superadmin TOTP secret must be a valid base32 secret',
+  );
 
   // Demo tenant with a trial subscription limited to 25 users.
   const tenant = await pool.query<{ id: string }>(`SELECT id FROM tenants WHERE slug = 'vortech-demo'`);

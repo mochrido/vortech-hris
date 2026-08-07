@@ -64,20 +64,31 @@ async function upsertUser(
   client: pg.PoolClient,
   user: { tenantId: string; displayName: string; email: string; password: string },
 ): Promise<{ id: string; inserted: boolean }> {
+  const passwordHash = await hashPassword(user.password);
+  // Single atomic INSERT ... ON CONFLICT ... DO NOTHING keyed on the partial
+  // unique index users_tenant_email_key ((tenant_id, email_normalized) WHERE
+  // email_normalized IS NOT NULL). The WHERE clause in the inference spec is
+  // required so Postgres can match the partial index by column list. This
+  // removes the SELECT-then-INSERT TOCTOU gap: a concurrent seed inserting the
+  // same (tenant, email) no longer throws a unique violation.
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO users (tenant_id, display_name, email_normalized, password_hash)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (tenant_id, email_normalized) WHERE email_normalized IS NOT NULL
+     DO NOTHING
+     RETURNING id`,
+    [user.tenantId, user.displayName, user.email, passwordHash],
+  );
+  if (inserted.rows.length > 0) {
+    return { id: inserted.rows[0].id, inserted: true };
+  }
+
+  // Row already existed: fetch its id so callers always get a usable user id.
   const existing = await client.query<{ id: string }>(
     `SELECT id FROM users WHERE tenant_id = $1 AND email_normalized = $2`,
     [user.tenantId, user.email],
   );
-  if (existing.rows.length > 0) return { id: existing.rows[0].id, inserted: false };
-
-  const passwordHash = await hashPassword(user.password);
-  const inserted = await client.query<{ id: string }>(
-    `INSERT INTO users (tenant_id, display_name, email_normalized, password_hash)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id`,
-    [user.tenantId, user.displayName, user.email, passwordHash],
-  );
-  return { id: inserted.rows[0].id, inserted: true };
+  return { id: existing.rows[0].id, inserted: false };
 }
 
 async function ensureRole(client: pg.PoolClient, userId: string, role: string): Promise<void> {
