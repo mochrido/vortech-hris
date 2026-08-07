@@ -19,8 +19,11 @@ test('runMigrations creates schema_migrations, applies pending migrations once, 
   });
 
   const first = await runMigrations(pool, migrationsDir);
-  assert.ok(first.length > 0, 'expected at least one migration to be applied');
-  assert.ok(first.includes('0001_core_identity'), `expected 0001_core_identity in applied versions, got ${JSON.stringify(first)}`);
+  assert.deepEqual(
+    first,
+    ['0001_core_identity', '0002_auth', '0003_subscription_branding'],
+    'expected all migrations to be applied in filename order',
+  );
 
   const tables = await pool.query<{ table_name: string }>(
     `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`,
@@ -33,5 +36,9 @@ test('runMigrations creates schema_migrations, applies pending migrations once, 
   assert.deepEqual(second, [], 'second run should apply nothing');
 
   const recorded = await pool.query<{ version: string }>(`SELECT version FROM schema_migrations ORDER BY version`);
-  assert.deepEqual(recorded.rows.map((r) => r.version), ['0001_core_identity']);
+  assert.deepEqual(recorded.rows.map((r) => r.version), [
+    '0001_core_identity',
+    '0002_auth',
+    '0003_subscription_branding',
+  ]);
 });
