@@ -36,6 +36,11 @@ ENV HOSTNAME=0.0.0.0
 # unprivileged `node` user (uid/gid 1000).
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
+
+# Guarantee the destination exists even if the source repo has an empty or
+# absent public/ (a bare `COPY /app/public ./public` fails the BuildKit build
+# when the source directory is missing). public/.gitkeep keeps the dir tracked.
+RUN mkdir -p ./public
 COPY --from=build --chown=node:node /app/public ./public
 
 USER node
