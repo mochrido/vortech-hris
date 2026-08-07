@@ -51,6 +51,7 @@ async function main(): Promise<void> {
     console.log(`  superadmin:        ${summary.superadminEmail} (TOTP enrolled)`);
     console.log(`  demo tenant:       ${summary.tenantSlug} (plan trial, 25 users)`);
     console.log(`  demo users:        admin / manager / member @vortech-demo.local`);
+    console.log(`  users inserted:    ${summary.usersCreated}`);
     console.log(`  locations:         ${summary.locationsCreated}`);
     console.log(`  schedules:         ${summary.schedulesCreated}`);
     console.log(`  holidays inserted: ${summary.holidaysInserted} (2026-2027 national)`);

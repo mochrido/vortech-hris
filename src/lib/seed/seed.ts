@@ -55,16 +55,20 @@ async function upsertTenant(
   return result.rows[0].id;
 }
 
-/** Returns the user id; inserts the user (and hashes `password`) only if the (tenant, email) does not already exist. */
+/**
+ * Returns the user id and whether this call inserted the row. Inserts the
+ * user (and hashes `password`) only if the (tenant, email) does not already
+ * exist.
+ */
 async function upsertUser(
   client: pg.PoolClient,
   user: { tenantId: string; displayName: string; email: string; password: string },
-): Promise<string> {
+): Promise<{ id: string; inserted: boolean }> {
   const existing = await client.query<{ id: string }>(
     `SELECT id FROM users WHERE tenant_id = $1 AND email_normalized = $2`,
     [user.tenantId, user.email],
   );
-  if (existing.rows.length > 0) return existing.rows[0].id;
+  if (existing.rows.length > 0) return { id: existing.rows[0].id, inserted: false };
 
   const passwordHash = await hashPassword(user.password);
   const inserted = await client.query<{ id: string }>(
@@ -73,7 +77,7 @@ async function upsertUser(
      RETURNING id`,
     [user.tenantId, user.displayName, user.email, passwordHash],
   );
-  return inserted.rows[0].id;
+  return { id: inserted.rows[0].id, inserted: true };
 }
 
 async function ensureRole(client: pg.PoolClient, userId: string, role: string): Promise<void> {
@@ -83,14 +87,14 @@ async function ensureRole(client: pg.PoolClient, userId: string, role: string): 
   );
 }
 
-async function seedSuperadmin(client: pg.PoolClient): Promise<string> {
+async function seedSuperadmin(client: pg.PoolClient): Promise<{ email: string; userInserted: boolean }> {
   const tenantId = await upsertTenant(client, {
     slug: SUPERADMIN_TENANT_SLUG,
     legalName: 'Vortech Platform',
     displayName: 'Vortech Platform',
   });
 
-  const userId = await upsertUser(client, {
+  const { id: userId, inserted: userInserted } = await upsertUser(client, {
     tenantId,
     displayName: 'Superadmin',
     email: SUPERADMIN_EMAIL,
@@ -114,7 +118,7 @@ async function seedSuperadmin(client: pg.PoolClient): Promise<string> {
     );
   }
 
-  return SUPERADMIN_EMAIL;
+  return { email: SUPERADMIN_EMAIL, userInserted };
 }
 
 async function seedDemoTenant(client: pg.PoolClient): Promise<{ tenantId: string; usersCreated: number }> {
@@ -124,31 +128,36 @@ async function seedDemoTenant(client: pg.PoolClient): Promise<{ tenantId: string
     displayName: 'Vortech Demo',
   });
 
-  const adminId = await upsertUser(client, {
+  let usersCreated = 0;
+
+  const admin = await upsertUser(client, {
     tenantId,
     displayName: 'Demo Admin',
     email: DEMO_ADMIN_EMAIL,
     password: seedPassword('SEED_DEMO_ADMIN_PASSWORD', 'Admin-Dev-0000'),
   });
-  await ensureRole(client, adminId, 'admin');
+  if (admin.inserted) usersCreated++;
+  await ensureRole(client, admin.id, 'admin');
 
-  const managerId = await upsertUser(client, {
+  const manager = await upsertUser(client, {
     tenantId,
     displayName: 'Demo Manager',
     email: DEMO_MANAGER_EMAIL,
     password: seedPassword('SEED_DEMO_MANAGER_PASSWORD', 'Manager-Dev-0000'),
   });
-  await ensureRole(client, managerId, 'manager');
+  if (manager.inserted) usersCreated++;
+  await ensureRole(client, manager.id, 'manager');
 
-  const memberId = await upsertUser(client, {
+  const member = await upsertUser(client, {
     tenantId,
     displayName: 'Demo Member',
     email: DEMO_MEMBER_EMAIL,
     password: seedPassword('SEED_DEMO_MEMBER_PASSWORD', 'Member-Dev-0000'),
   });
-  await ensureRole(client, memberId, 'member');
+  if (member.inserted) usersCreated++;
+  await ensureRole(client, member.id, 'member');
 
-  return { tenantId, usersCreated: 3 };
+  return { tenantId, usersCreated };
 }
 
 /** Two locations, each with its own radius (decisions.md #1). Keyed by (tenant, name). */
@@ -157,15 +166,17 @@ async function seedLocations(client: pg.PoolClient, tenantId: string): Promise<n
     { name: 'Kantor Pusat Jakarta', latitude: '-6.200000', longitude: '106.816666', radiusM: 100 },
     { name: 'Kantor Cabang Bandung', latitude: '-6.914744', longitude: '107.609810', radiusM: 150 },
   ];
+  let inserted = 0;
   for (const loc of locations) {
-    await client.query(
+    const result = await client.query(
       `INSERT INTO locations (tenant_id, name, latitude, longitude, radius_m)
        SELECT $1, $2, $3, $4, $5
        WHERE NOT EXISTS (SELECT 1 FROM locations WHERE tenant_id = $1 AND name = $2)`,
       [tenantId, loc.name, loc.latitude, loc.longitude, loc.radiusM],
     );
+    inserted += result.rowCount ?? 0;
   }
-  return locations.length;
+  return inserted;
 }
 
 /** One fixed Mon-Fri 09:00-17:00 schedule with its schedule_days rows. */
@@ -198,7 +209,9 @@ async function seedSchedule(client: pg.PoolClient, tenantId: string): Promise<nu
     );
   }
 
-  return 1;
+  // The schedule was inserted by this run only if the INSERT ... RETURNING
+  // produced a row; an existing schedule means zero inserted.
+  return schedule.rows.length;
 }
 
 /** Trial subscription: 25 users (decisions.md #7). One row per tenant. */
@@ -237,17 +250,18 @@ export async function runSeed(pool: pg.Pool): Promise<SeedSummary> {
   try {
     await client.query('BEGIN');
 
-    const superadminEmail = await seedSuperadmin(client);
-    const { tenantId, usersCreated } = await seedDemoTenant(client);
-    const locationsCreated = await seedLocations(client, tenantId);
-    const schedulesCreated = await seedSchedule(client, tenantId);
-    await seedSubscription(client, tenantId);
+    const superadmin = await seedSuperadmin(client);
+    const demo = await seedDemoTenant(client);
+    const usersCreated = (superadmin.userInserted ? 1 : 0) + demo.usersCreated;
+    const locationsCreated = await seedLocations(client, demo.tenantId);
+    const schedulesCreated = await seedSchedule(client, demo.tenantId);
+    await seedSubscription(client, demo.tenantId);
     const holidaysInserted = await seedHolidays(client);
 
     await client.query('COMMIT');
 
     return {
-      superadminEmail,
+      superadminEmail: superadmin.email,
       tenantSlug: DEMO_TENANT_SLUG,
       usersCreated,
       locationsCreated,

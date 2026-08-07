@@ -1,35 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { createTestDatabase, dropTestDatabase } from '../test/db.ts';
+import { loadEnvFile } from '../test/env.ts';
 import { runMigrations } from '../db/migrate.ts';
 import { runSeed } from './seed.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const migrationsDir = path.join(repoRoot, 'migrations');
-
-/** Minimal .env loader: KEY=VALUE lines, # comments, no dotenv dependency. */
-function loadEnvFile(file: string): void {
-  if (!existsSync(file)) return;
-  for (const rawLine of readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) process.env[key] = value;
-  }
-}
 
 // runSeed encrypts the superadmin TOTP secret with TOTP_ENCRYPTION_KEY. Load
 // the repo `.env` up-front so the key is present for the seed.
@@ -159,13 +139,25 @@ test('seed: running the seed a second time is idempotent', async (t) => {
   });
 
   await runMigrations(pool, migrationsDir);
-  await runSeed(pool);
+  const first = await runSeed(pool);
   const before = await seedTableCounts(pool);
 
-  await runSeed(pool);
+  const second = await runSeed(pool);
   const after = await seedTableCounts(pool);
 
   assert.deepEqual(after, before, 'second seed run must not change any seeded table counts');
+
+  // Second run must report zero newly inserted rows for every seeded entity.
+  assert.equal(second.usersCreated, 0, 'second run must report 0 users inserted');
+  assert.equal(second.locationsCreated, 0, 'second run must report 0 locations inserted');
+  assert.equal(second.schedulesCreated, 0, 'second run must report 0 schedules inserted');
+  assert.equal(second.holidaysInserted, 0, 'second run must report 0 holidays inserted');
+
+  // First run must report the expected positive counts.
+  assert.ok(first.usersCreated > 0, 'first run must report users inserted');
+  assert.ok(first.locationsCreated > 0, 'first run must report locations inserted');
+  assert.ok(first.schedulesCreated > 0, 'first run must report schedules inserted');
+  assert.ok(first.holidaysInserted > 0, 'first run must report holidays inserted');
 
   // Spot-check the specific identities the task calls out. Counts reflect one
   // platform tenant (superadmin) plus one demo tenant.
