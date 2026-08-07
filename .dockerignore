@@ -1,0 +1,35 @@
+# Dependencies and build output
+node_modules
+.next
+out
+coverage
+
+# Environment / secrets — never bake real env files into the image.
+.env
+.env.*
+!.env.example
+
+# VCS
+.git
+.gitignore
+
+# Local data and runtime artifacts
+uploads
+data
+backups
+*.log
+*.tsbuildinfo
+
+# Internal planning/spec docs not needed in the image
+docs/superpowers
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docker build context itself
+Dockerfile
+docker-compose.yml
+.dockerignore

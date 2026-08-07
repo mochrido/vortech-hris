@@ -38,3 +38,14 @@ If a decision changes, update this file and note the change in `CHANGELOG.md`.
    manual CRUD. No external holiday dependency.
 10. **Product name** — **Vortech HRIS**. Used in UI, PWA manifest, and login screens.
     Repo/domain remain `vortech-hris`.
+
+## Platform and tenancy
+
+11. **Platform tenant for superadmin** — The superadmin user lives in a dedicated,
+    non-customer **platform tenant** (`vortech-platform`). Because `users.tenant_id` is
+    `NOT NULL` and the superadmin scope is Platform (PRD 5.1/6), the superadmin cannot be
+    modeled as a row in a customer tenant. The platform tenant exists solely to satisfy the
+    foreign-key requirement and holds no customer data. Superadmin privilege derives from the
+    `superadmin` row in `user_roles`, never from the tenant. Superadmin CRUD endpoints are
+    role-checked, non-tenant-scoped paths. **Caveat:** tenant-level reporting and metrics
+    must explicitly exclude the platform tenant to avoid skewing counts.

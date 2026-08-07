@@ -7,5 +7,6 @@ coverage/
 !.env.example
 uploads/
 data/
+backups/
 *.log
 *.tsbuildinfo

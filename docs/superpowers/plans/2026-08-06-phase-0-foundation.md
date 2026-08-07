@@ -10,7 +10,7 @@
 
 **Authoritative references:** `docs/PRD.md — Attendance Management PWA.md` (behavior), `docs/decisions.md` (resolved values), `docs/superpowers/specs/2026-08-06-phase-0-foundation-design.md` (this design).
 
-**Local dev database:** PostgreSQL 17.10 native on Windows. Database `vortech`, app role `vortech_app` (password `vortech-app-pg`), superuser `postgres` (password `vortech-dev-pg`). These are dev-only credentials; they live in git-ignored `.env`, never in tracked files. `DATABASE_URL` for dev: `postgresql://vortech_app:vortech-app-pg@127.0.0.1:5432/vortech`.
+**Local dev database:** PostgreSQL 17.10 native on Windows. Database `vortech`, app role `vortech_app`, superuser `postgres`. These are dev-only credentials; real passwords live in git-ignored `.env`, never in tracked files. `DATABASE_URL` for dev: `postgresql://vortech_app:<password>@127.0.0.1:5432/vortech`; `TEST_DATABASE_ADMIN_URL` for tests: `postgresql://postgres:<password>@127.0.0.1:5432/postgres`. Real values are in `.env`.
 
 ---
 
