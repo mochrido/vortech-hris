@@ -2,6 +2,10 @@ import { randomBytes, createHmac, createCipheriv, createDecipheriv, timingSafeEq
 
 const TOTP_STEP_SECONDS = 30;
 const TOTP_DIGITS = 6;
+// Largest accepted clock-skew window, in time steps. verifyTotp clamps any
+// caller-supplied window into [0, MAX_TOTP_WINDOW] so a programming error can
+// never widen the acceptance window beyond ±2 steps (±60s).
+const MAX_TOTP_WINDOW = 2;
 const IV_LENGTH = 12; // 96-bit IV for AES-GCM
 const TAG_LENGTH = 16; // 128-bit auth tag
 
@@ -81,15 +85,27 @@ function currentTimeStep(): number {
 }
 
 /**
+ * Normalizes the caller-supplied skew window to a safe integer in
+ * [0, MAX_TOTP_WINDOW]. Non-finite or non-numeric input falls back to the
+ * default of 1; fractional values are truncated; out-of-range values are
+ * clamped. This fails closed: no input can ever widen the window beyond ±2.
+ */
+function clampWindow(input: unknown): number {
+  const value = typeof input === 'number' && Number.isFinite(input) ? Math.trunc(input) : 1;
+  return Math.min(MAX_TOTP_WINDOW, Math.max(0, value));
+}
+
+/**
  * Verifies a TOTP code against a secret. Accepts codes within ±`window`
- * time steps of the current step (default window=1 to tolerate clock skew).
+ * time steps of the current step. The window is clamped to [0, 2]; the
+ * default is 1 to tolerate typical clock skew.
  */
 export function verifyTotp(
   secret: string,
   code: string,
   options: { window?: number } = {},
 ): boolean {
-  const window = options.window ?? 1;
+  const window = clampWindow(options.window);
   if (!/^\d{6}$/.test(code)) return false;
   const now = currentTimeStep();
   for (let offset = -window; offset <= window; offset++) {

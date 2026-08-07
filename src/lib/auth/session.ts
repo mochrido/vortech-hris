@@ -3,6 +3,9 @@ import { getPool } from '../db/pool.ts';
 
 const DEFAULT_TTL_HOURS = 720;
 const DEFAULT_COOKIE_NAME = 'vortech_session';
+// Minimum interval between last_seen_at writes for a given session. Requests
+// arriving more frequently than this reuse the existing last_seen_at.
+const LAST_SEEN_THROTTLE_SECONDS = 60;
 
 export interface SessionMeta {
   userAgent?: string;
@@ -77,6 +80,25 @@ function isSecureOrigin(): boolean {
 }
 
 /**
+ * True when APP_ORIGIN points at a loopback host (localhost / 127.0.0.1 / [::1]),
+ * where an http:// (non-Secure) cookie is expected and harmless in development.
+ * Fail-closed: any unparseable origin returns false so the warning still fires.
+ */
+function isLocalhostOrigin(origin: string): boolean {
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    return (
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname === '127.0.0.1' ||
+      hostname === '[::1]'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Creates a new session for a user. Generates a random 32-byte raw token,
  * stores ONLY its SHA-256 hash in the DB, and returns the raw token plus
  * cookie attributes suitable for an HttpOnly Set-Cookie header.
@@ -109,13 +131,26 @@ export async function createSession(userId: string, meta: SessionMeta): Promise<
 
   const session = insert.rows[0];
 
+  const secure = isSecureOrigin();
+  const appOrigin = process.env.APP_ORIGIN ?? '';
+  if (!secure && !isLocalhostOrigin(appOrigin)) {
+    // Loud signal for a misconfiguration that is easy to miss: a non-localhost
+    // http:// origin means the session cookie is sent without the Secure flag,
+    // exposing it to network interception. Loopback dev origins stay quiet.
+    console.warn(
+      `[vortech-hris] WARNING: session cookie will be sent WITHOUT the Secure flag. ` +
+        `APP_ORIGIN is "${appOrigin || '(unset)'}" which is not https and not localhost. ` +
+        `Set APP_ORIGIN to an https:// origin in any non-local environment.`,
+    );
+  }
+
   const cookie: SessionCookie = {
     name: cookieName(),
     value: token,
     httpOnly: true,
     sameSite: 'lax',
     path: '/',
-    secure: isSecureOrigin(),
+    secure,
     maxAge: maxAgeSeconds,
   };
 
@@ -146,6 +181,24 @@ export async function getSessionByToken(token: string): Promise<ResolvedSession 
   );
 
   if (result.rows.length === 0) return null;
+
+  // Throttled last_seen_at touch: avoid a write on every request. Only update
+  // when last_seen_at is NULL or older than LAST_SEEN_THROTTLE_SECONDS. The
+  // freshness predicate lives in the UPDATE's WHERE clause so the decision is
+  // atomic in Postgres (no read-then-write race). The row resolved above is
+  // already known valid, so this is a best-effort, single-statement touch.
+  pool
+    .query(
+      `UPDATE sessions
+          SET last_seen_at = now()
+        WHERE token_hash = $1
+          AND (last_seen_at IS NULL OR last_seen_at < now() - ($2 * interval '1 second'))`,
+      [tokenHash, LAST_SEEN_THROTTLE_SECONDS],
+    )
+    .catch(() => {
+      // Swallow errors: failing to refresh last_seen_at must never fail the
+      // session resolution itself.
+    });
 
   const row = result.rows[0];
   const session: SessionRow = {

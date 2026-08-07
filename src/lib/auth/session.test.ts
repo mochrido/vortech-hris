@@ -19,6 +19,28 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const migrationsDir = path.join(repoRoot, 'migrations');
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Runs fn while capturing console.warn output, then restores the original.
+ * Returns whatever fn produced plus the list of warning messages emitted.
+ */
+async function withCapturedWarn<T>(fn: () => Promise<T>): Promise<{ result: T; warnings: string[] }> {
+  const original = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]): void => {
+    warnings.push(args.map(String).join(' '));
+  };
+  try {
+    const result = await fn();
+    return { result, warnings };
+  } finally {
+    console.warn = original;
+  }
+}
+
 // --- Env helpers -----------------------------------------------------------
 
 type EnvKey = 'DATABASE_URL' | 'APP_ORIGIN' | 'SESSION_TTL_HOURS' | 'SESSION_COOKIE_NAME';
@@ -187,6 +209,45 @@ test('createSession cookie secure=false when APP_ORIGIN is http', async (t) => {
   });
 });
 
+test('createSession cookie is secure and emits no warning for an https APP_ORIGIN', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv({ ...envFor(fixture), APP_ORIGIN: 'https://hris.example.com' }, async () => {
+    const tenantId = await insertTenant(fixture.pool);
+    const userId = await insertUser(fixture.pool, tenantId);
+
+    const { result: created, warnings } = await withCapturedWarn(() => createSession(userId, {}));
+    assert.equal(created.cookie.secure, true, 'secure must be true for an https origin');
+    assert.equal(warnings.length, 0, 'no insecure-cookie warning must be emitted for https');
+  });
+});
+
+test('createSession warns about a non-Secure cookie for a non-localhost http origin', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv({ ...envFor(fixture), APP_ORIGIN: 'http://hris.internal.example.com' }, async () => {
+    const tenantId = await insertTenant(fixture.pool);
+    const userId = await insertUser(fixture.pool, tenantId);
+
+    const { result: created, warnings } = await withCapturedWarn(() => createSession(userId, {}));
+    assert.equal(created.cookie.secure, false, 'secure must be false for an http origin');
+    assert.ok(
+      warnings.some((w) => /without the secure flag/i.test(w)),
+      `a warning about the missing Secure flag must be emitted; got: ${JSON.stringify(warnings)}`,
+    );
+  });
+});
+
+test('createSession stays quiet for a loopback http origin (localhost dev)', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv({ ...envFor(fixture), APP_ORIGIN: 'http://127.0.0.1:3000' }, async () => {
+    const tenantId = await insertTenant(fixture.pool);
+    const userId = await insertUser(fixture.pool, tenantId);
+
+    const { result: created, warnings } = await withCapturedWarn(() => createSession(userId, {}));
+    assert.equal(created.cookie.secure, false, 'secure must be false for an http loopback origin');
+    assert.equal(warnings.length, 0, 'no insecure-cookie warning must be emitted for loopback dev');
+  });
+});
+
 test('getSessionByToken returns the session and user for a valid token', async (t) => {
   const fixture = await setupDb(t);
   await withEnv(envFor(fixture), async () => {
@@ -254,6 +315,77 @@ test('getSessionByToken returns null for a deactivated user', async (t) => {
     const created = await createSession(userId, {});
     const found = await getSessionByToken(created.token);
     assert.equal(found, null, 'deactivated user must not be able to use a session');
+  });
+});
+
+test('getSessionByToken populates last_seen_at when NULL, then throttles immediate repeat calls', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv(envFor(fixture), async () => {
+    const tenantId = await insertTenant(fixture.pool);
+    const userId = await insertUser(fixture.pool, tenantId);
+    const created = await createSession(userId, {});
+
+    // Sanity: a freshly created session has never been seen.
+    const initial = await fixture.pool.query<{ last_seen_at: Date | null }>(
+      'SELECT last_seen_at FROM sessions WHERE id = $1',
+      [created.session.id],
+    );
+    assert.equal(initial.rows[0].last_seen_at, null, 'last_seen_at must start NULL');
+
+    // First resolution: last_seen_at is NULL so the throttled UPDATE fires.
+    await getSessionByToken(created.token);
+    await sleep(150); // allow the fire-and-forget UPDATE to commit
+
+    const afterFirst = await fixture.pool.query<{ last_seen_at: Date | null }>(
+      'SELECT last_seen_at FROM sessions WHERE id = $1',
+      [created.session.id],
+    );
+    assert.ok(afterFirst.rows[0].last_seen_at, 'first resolution must populate last_seen_at');
+    const firstValue = afterFirst.rows[0].last_seen_at!.getTime();
+
+    // Immediate second resolution: last_seen_at is fresh (< 60s), so the UPDATE
+    // is a no-op and the stored value must NOT be rewritten.
+    await getSessionByToken(created.token);
+    await sleep(150);
+
+    const afterSecond = await fixture.pool.query<{ last_seen_at: Date | null }>(
+      'SELECT last_seen_at FROM sessions WHERE id = $1',
+      [created.session.id],
+    );
+    assert.equal(
+      afterSecond.rows[0].last_seen_at!.getTime(),
+      firstValue,
+      'an immediate repeat call must not rewrite last_seen_at (throttled)',
+    );
+  });
+});
+
+test('getSessionByToken refreshes last_seen_at once it is older than the throttle threshold', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv(envFor(fixture), async () => {
+    const tenantId = await insertTenant(fixture.pool);
+    const userId = await insertUser(fixture.pool, tenantId);
+    const created = await createSession(userId, {});
+
+    // Simulate a session last seen well beyond the 60-second throttle window.
+    const stale = new Date('2000-01-01T00:00:00.000Z');
+    await fixture.pool.query('UPDATE sessions SET last_seen_at = $1 WHERE id = $2', [
+      stale,
+      created.session.id,
+    ]);
+
+    await getSessionByToken(created.token);
+    await sleep(150); // allow the fire-and-forget UPDATE to commit
+
+    const after = await fixture.pool.query<{ last_seen_at: Date | null }>(
+      'SELECT last_seen_at FROM sessions WHERE id = $1',
+      [created.session.id],
+    );
+    assert.ok(after.rows[0].last_seen_at, 'last_seen_at must be set after resolution');
+    assert.ok(
+      after.rows[0].last_seen_at!.getTime() > stale.getTime(),
+      `last_seen_at must be refreshed past the stale value; got ${after.rows[0].last_seen_at}`,
+    );
   });
 });
 
