@@ -52,6 +52,10 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    environment:
+      # The Caddyfile references {$DOMAIN}; pass it through so the site block
+      # renders (an empty DOMAIN makes Caddy misparse the file as a global block).
+      DOMAIN: ${DOMAIN:-localhost}
     ports:
       - "80:80"
       - "443:443"

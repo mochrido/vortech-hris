@@ -123,8 +123,8 @@ Verify backups are actually restorable every month by restoring into a **scratch
 If any step fails, treat it as an incident: fix the backup pipeline before relying on it.
 
 
-## Prototype Limits
+## Current State
 
-All displayed data and actions are mock-only and held in memory. The role switcher is a review tool, not authorization. This phase does not make camera or GPS calls, persist to a database, upload images, or provide real authentication, offline storage, or server-side access control.
+Phase 0 (foundation) is implemented: PostgreSQL schema + migrations, session/TOTP auth, tenant-isolation guard, seed data, Docker Compose deployment, and backup/restore. The in-browser UI at `/` is still the mock-data prototype from the earlier phase — its role switcher is a review tool, not authorization, and it does not use the real backend yet. Real attendance capture, offline sync, and the live admin UI are Phases 1–3.
 
 Do not add secrets to this repository. Use `.env.example` only as a list of non-secret local placeholders; local `.env` files are ignored.
