@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
-import { getManagerDashboard } from "../lib/demo/selectors";
+import { DEMO_TODAY, getManagerDashboard } from "../lib/demo/selectors";
 import type { AttendanceStatus } from "../lib/demo/types";
+import { MetricCard } from "./metric-card";
 import { SectionCard } from "./section-card";
+import { SimulationNote } from "./simulation-note";
 import { StatusBadge } from "./status-badge";
 
 type ManagerViewProps = { activeNav: string };
@@ -17,7 +19,6 @@ type RowStatus = {
 
 type CorrectionDecision = "review-required" | "approved" | "rejected";
 
-const TODAY = "2026-08-06";
 const REVIEW_STATES: Record<CorrectionDecision, { label: string; tone: "warning" | "success" | "danger" }> = {
   "review-required": { label: "Menunggu tinjauan", tone: "warning" },
   approved: { label: "Disetujui (simulasi)", tone: "success" },
@@ -38,12 +39,9 @@ function rowStatus(status: AttendanceStatus, syncState: string): RowStatus {
 export function ManagerView({ activeNav }: ManagerViewProps) {
   const dashboard = getManagerDashboard();
   const [decisions, setDecisions] = useState<Record<string, CorrectionDecision>>({});
-  const locationNames = useMemo(
-    () => ({ "location-kantor-pusat": "Kantor Pusat", "location-gudang-timur": "Gudang Timur" }) as Record<string, string>,
-    [],
-  );
+  const locationNames = Object.fromEntries(dashboard.locations.map((location) => [location.key, location.name]));
 
-  const todayRows = dashboard.attendance.filter((row) => row.date === TODAY);
+  const todayRows = dashboard.attendance.filter((row) => row.date === DEMO_TODAY);
   const metrics = {
     present: todayRows.filter((row) => row.status === "present").length,
     late: todayRows.filter((row) => row.status === "late").length,
@@ -60,7 +58,7 @@ export function ManagerView({ activeNav }: ManagerViewProps) {
           <h1>Koreksi kehadiran</h1>
           <p>Semua pengajuan koreksi anggota tim. Keputusan pada halaman ini hanya simulasi di memori peramban.</p>
         </div>
-        <SimulationNote />
+        <SimulationNote>Tampilan simulasi — keputusan dan perubahan hanya berlaku di sesi pratinjau ini, tidak tersimpan, dan tidak memberikan otorisasi apa pun.</SimulationNote>
         <SectionCard eyebrow={`${dashboard.correctionRequests.length} pengajuan`} title="Semua koreksi">
           <CorrectionList
             corrections={dashboard.correctionRequests}
@@ -81,9 +79,9 @@ export function ManagerView({ activeNav }: ManagerViewProps) {
           <h1>Kehadiran tim hari ini</h1>
           <p>Rekap Kamis, 6 Agustus 2026 untuk {dashboard.users.length} anggota tim, termasuk indikator lokasi dan sinkronisasi.</p>
         </div>
-        <SimulationNote />
+        <SimulationNote>Tampilan simulasi — keputusan dan perubahan hanya berlaku di sesi pratinjau ini, tidak tersimpan, dan tidak memberikan otorisasi apa pun.</SimulationNote>
         <SectionCard eyebrow="Hari ini" title="Tabel kehadiran tim">
-          <TeamTable dashboard={dashboard} rows={todayRows} locationNames={locationNames} showAllDays={false} />
+          <TeamTable dashboard={dashboard} rows={todayRows} locationNames={locationNames} />
         </SectionCard>
       </div>
     );
@@ -96,15 +94,15 @@ export function ManagerView({ activeNav }: ManagerViewProps) {
         <h1>Kamis, 6 Agustus 2026</h1>
         <p>Pantauan kehadiran tim hari ini dan koreksi yang menunggu keputusan Anda. Data berasal dari fixture demo.</p>
       </div>
-      <SimulationNote />
+      <SimulationNote>Tampilan simulasi — keputusan dan perubahan hanya berlaku di sesi pratinjau ini, tidak tersimpan, dan tidak memberikan otorisasi apa pun.</SimulationNote>
       <div className="mgmt-metrics" role="list" aria-label="Ringkasan kehadiran tim hari ini">
-        <Metric label="Hadir" symbol="✓" tone="success" value={metrics.present} />
-        <Metric label="Terlambat" symbol="◷" tone="accent" value={metrics.late} />
-        <Metric label="Belum check-in" symbol="–" tone="neutral" value={metrics.notCheckedIn} />
-        <Metric label="Anomali & perlu tindakan" symbol="▲" tone="danger" value={metrics.anomaly} />
+        <MetricCard label="Hadir" symbol="✓" tone="success" value={metrics.present} />
+        <MetricCard label="Terlambat" symbol="◷" tone="accent" value={metrics.late} />
+        <MetricCard label="Belum check-in" symbol="–" tone="neutral" value={metrics.notCheckedIn} />
+        <MetricCard label="Anomali & perlu tindakan" symbol="▲" tone="danger" value={metrics.anomaly} />
       </div>
       <SectionCard eyebrow="Hari ini" title="Tabel kehadiran tim">
-        <TeamTable dashboard={dashboard} rows={todayRows} locationNames={locationNames} showAllDays={false} />
+        <TeamTable dashboard={dashboard} rows={todayRows} locationNames={locationNames} />
       </SectionCard>
       <SectionCard eyebrow={`${pendingCorrections.length} menunggu`} title="Koreksi menunggu keputusan">
         {pendingCorrections.length === 0 ? (
@@ -124,34 +122,20 @@ export function ManagerView({ activeNav }: ManagerViewProps) {
 
 type Dashboard = ReturnType<typeof getManagerDashboard>;
 
-function Metric({ label, symbol, tone, value }: { label: string; symbol: string; tone: string; value: number }) {
-  return (
-    <div className={`mgmt-metric mgmt-metric--${tone}`} role="listitem">
-      <span className="mgmt-metric__mark" aria-hidden="true">{symbol}</span>
-      <div>
-        <strong>{value}</strong>
-        <span>{label}</span>
-      </div>
-    </div>
-  );
-}
-
 function TeamTable({
   dashboard,
   locationNames,
   rows,
-  showAllDays,
 }: {
   dashboard: Dashboard;
   locationNames: Record<string, string>;
   rows: Dashboard["attendance"];
-  showAllDays: boolean;
 }) {
   if (rows.length === 0) return <p className="mgmt-empty">Belum ada catatan kehadiran untuk ditampilkan.</p>;
   return (
     <div className="mgmt-table-wrap">
       <table>
-        <caption className="sr-only">Kehadiran anggota tim {showAllDays ? "semua tanggal" : "hari ini"}</caption>
+        <caption className="sr-only">Kehadiran anggota tim hari ini</caption>
         <thead>
           <tr>
             <th scope="col">Nama</th>
@@ -171,7 +155,6 @@ function TeamTable({
               <tr className={flagged ? "mgmt-row--flagged" : undefined} key={row.key}>
                 <td data-th="Nama">
                   <strong>{user?.name ?? row.userKey}</strong>
-                  {showAllDays ? <small className="mgmt-cell-sub">{row.date}</small> : null}
                 </td>
                 <td data-th="Status">
                   <StatusBadge tone={status.tone}>
@@ -249,13 +232,5 @@ function CorrectionList({
         );
       })}
     </ul>
-  );
-}
-
-function SimulationNote() {
-  return (
-    <p className="mgmt-simulation-note" role="note">
-      <span aria-hidden="true">ⓘ</span> Tampilan simulasi — keputusan dan perubahan hanya berlaku di sesi pratinjau ini, tidak tersimpan, dan tidak memberikan otorisasi apa pun.
-    </p>
   );
 }

@@ -1,7 +1,9 @@
 "use client";
 
 import { getSuperadminOverview } from "../lib/demo/selectors";
+import { MetricCard } from "./metric-card";
 import { SectionCard } from "./section-card";
+import { SimulationNote } from "./simulation-note";
 import { StatusBadge } from "./status-badge";
 
 type SuperadminViewProps = { activeNav: string };
@@ -40,7 +42,7 @@ export function SuperadminView({ activeNav }: SuperadminViewProps) {
           <h1>Tenant</h1>
           <p>Daftar tenant demo beserta paket, status langganan, dan tanggal pembaruan.</p>
         </div>
-        <SimulationNote />
+        <SimulationNote>Tampilan simulasi — pengelolaan tenant, langganan, dan pengaturan platform tidak tersimpan dan tidak memberikan otorisasi apa pun.</SimulationNote>
         <SectionCard eyebrow={`${overview.tenantSubscriptions.length} tenant`} title="Daftar tenant">
           <TenantTable subscriptions={overview.tenantSubscriptions} />
         </SectionCard>
@@ -59,7 +61,7 @@ export function SuperadminView({ activeNav }: SuperadminViewProps) {
           <h1>Pengaturan platform</h1>
           <p>Akses fitur, retensi data, dan branding platform. Seluruh kontrol hanya contoh tampilan.</p>
         </div>
-        <SimulationNote />
+        <SimulationNote>Tampilan simulasi — pengelolaan tenant, langganan, dan pengaturan platform tidak tersimpan dan tidak memberikan otorisasi apa pun.</SimulationNote>
         <SectionCard eyebrow="Fitur tenant" title="Akses fitur per tenant">
           <p className="mgmt-field-hint">Sakelar contoh untuk tenant {overview.tenant.name}. Status tidak tersimpan.</p>
           <FeatureList flags={tenantFlags} />
@@ -113,12 +115,12 @@ export function SuperadminView({ activeNav }: SuperadminViewProps) {
         <h1>Operasional platform</h1>
         <p>Gambaran seluruh tenant demo dan kesehatan langganan. Gunakan navigasi untuk detail tenant dan pengaturan platform.</p>
       </div>
-      <SimulationNote />
+      <SimulationNote>Tampilan simulasi — pengelolaan tenant, langganan, dan pengaturan platform tidak tersimpan dan tidak memberikan otorisasi apa pun.</SimulationNote>
       <div className="mgmt-metrics" role="list" aria-label="Ringkasan langganan platform">
-        <div className="mgmt-metric mgmt-metric--success" role="listitem"><span className="mgmt-metric__mark" aria-hidden="true">✓</span><div><strong>{overview.tenantSubscriptions.filter((item) => item.status === "active").length}</strong><span>Langganan aktif</span></div></div>
-        <div className="mgmt-metric" role="listitem"><span className="mgmt-metric__mark" aria-hidden="true">◔</span><div><strong>{overview.tenantSubscriptions.filter((item) => item.status === "trial").length}</strong><span>Masa uji coba</span></div></div>
-        <div className="mgmt-metric mgmt-metric--warning" role="listitem"><span className="mgmt-metric__mark" aria-hidden="true">!</span><div><strong>{overview.tenantSubscriptions.filter((item) => item.status === "past-due").length}</strong><span>Jatuh tempo</span></div></div>
-        <div className="mgmt-metric mgmt-metric--danger" role="listitem"><span className="mgmt-metric__mark" aria-hidden="true">✕</span><div><strong>{overview.tenantSubscriptions.filter((item) => item.status === "suspended").length}</strong><span>Ditangguhkan</span></div></div>
+        <MetricCard label="Langganan aktif" symbol="✓" tone="success" value={overview.tenantSubscriptions.filter((item) => item.status === "active").length} />
+        <MetricCard label="Masa uji coba" symbol="◔" tone="neutral" value={overview.tenantSubscriptions.filter((item) => item.status === "trial").length} />
+        <MetricCard label="Jatuh tempo" symbol="!" tone="warning" value={overview.tenantSubscriptions.filter((item) => item.status === "past-due").length} />
+        <MetricCard label="Ditangguhkan" symbol="✕" tone="danger" value={overview.tenantSubscriptions.filter((item) => item.status === "suspended").length} />
       </div>
       <SectionCard eyebrow="Semua tenant" title="Status langganan">
         <SubscriptionCards subscriptions={overview.tenantSubscriptions} />
@@ -208,14 +210,6 @@ function FeatureList({ flags }: { flags: Overview["featureFlags"] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-function SimulationNote() {
-  return (
-    <p className="mgmt-simulation-note" role="note">
-      <span aria-hidden="true">ⓘ</span> Tampilan simulasi — pengelolaan tenant, langganan, dan pengaturan platform tidak tersimpan dan tidak memberikan otorisasi apa pun.
-    </p>
   );
 }
 

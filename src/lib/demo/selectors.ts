@@ -1,5 +1,7 @@
-import { demoData } from './data.ts';
+import { DEMO_TODAY, demoData } from './data.ts';
 import type { AttendanceEvent, AttendanceEventState, AttendanceScenario, AttendanceSummary, DemoData, DemoRole } from './types.ts';
+
+export { DEMO_TODAY };
 
 const copy = <T>(value: T): T => structuredClone(value);
 type ReadonlyDemoData = { readonly [Key in keyof DemoData]: DeepReadonly<DemoData[Key]> };
@@ -21,7 +23,8 @@ export function getMemberDashboard() {
   const context = getDemoContext('member');
   const attendance = context.attendance.filter((row) => row.userKey === 'user-sari-utami');
   const history = attendance.filter((row) => row.date >= '2026-07-31').sort((a, b) => b.date.localeCompare(a.date));
-  const monthlyRows = attendance.filter((row) => row.date.startsWith('2026-08-') && row.checkIn && row.checkOut);
+  const currentMonth = DEMO_TODAY.slice(0, 7);
+  const monthlyRows = attendance.filter((row) => row.date.startsWith(currentMonth) && row.checkIn && row.checkOut);
   const workedMinutes = monthlyRows.reduce((total, row) => {
     const [inHour, inMinute] = row.checkIn!.split(':').map(Number);
     const [outHour, outMinute] = row.checkOut!.split(':').map(Number);
@@ -30,10 +33,10 @@ export function getMemberDashboard() {
   return {
     role: context.role,
     user: context.users.find((user) => user.key === 'user-sari-utami')!,
-    today: attendance.find((row) => row.date === '2026-08-06'),
+    today: attendance.find((row) => row.date === DEMO_TODAY),
     attendance,
     history,
-    monthlySummary: { lateCount: attendance.filter((row) => row.date.startsWith('2026-08-') && row.status === 'late').length, workedMinutes },
+    monthlySummary: { lateCount: attendance.filter((row) => row.date.startsWith(currentMonth) && row.status === 'late').length, workedMinutes },
     syncState: context.syncState,
   };
 }
@@ -84,6 +87,7 @@ export function getManagerDashboard() {
     role: context.role,
     team,
     users: context.users.filter((user) => userKeys.has(user.key)),
+    locations: context.locations,
     attendance: context.attendance.filter((row) => userKeys.has(row.userKey)),
     correctionRequests: context.correctionRequests.filter((request) => userKeys.has(request.userKey)),
   };

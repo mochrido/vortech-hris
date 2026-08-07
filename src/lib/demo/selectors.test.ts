@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEMO_TODAY,
   getAdminOverview,
   getAttendanceHistoryLabel,
   getDemoContext,
@@ -49,6 +50,8 @@ test('exposes representative dashboard data through narrow selectors', () => {
 test('provides a check-in-capable member history and monthly summary', () => {
   const member = getMemberDashboard();
 
+  assert.equal(DEMO_TODAY, '2026-08-06');
+  assert.equal(member.today?.date, DEMO_TODAY);
   assert.equal(member.today?.status, 'unknown');
   assert.equal(member.history.length, 7);
   assert.equal(member.monthlySummary.lateCount, 1);
@@ -65,6 +68,17 @@ test('scopes manager users and records to the assigned team', () => {
   assert.ok(manager.correctionRequests.every((request) => teamUserKeys.has(request.userKey)));
   assert.ok(manager.attendance.some((row) => row.status === 'late'));
   assert.ok(!manager.attendance.some((row) => row.userKey === 'user-dewi-pranoto'));
+});
+
+test('exposes tenant locations so views can resolve location names', () => {
+  const manager = getManagerDashboard();
+  const locationNames = Object.fromEntries(manager.locations.map((location) => [location.key, location.name]));
+  const usedLocationKeys = new Set(manager.attendance.map((row) => row.locationKey).filter((key): key is string => key !== null));
+
+  assert.ok(manager.locations.length >= 2);
+  assert.equal(locationNames['location-kantor-pusat'], 'Kantor Pusat');
+  assert.equal(locationNames['location-gudang-timur'], 'Gudang Timur');
+  assert.ok([...usedLocationKeys].every((key) => typeof locationNames[key] === 'string'));
 });
 
 test('keeps correction requests date-consistent with their attendance event', () => {

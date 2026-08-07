@@ -1,5 +1,7 @@
 import type { DemoData } from './types';
 
+export const DEMO_TODAY = '2026-08-06';
+
 export const demoData: DemoData = {
   tenant: { key: 'tenant-nusantara', name: 'PT Langkah Nusantara', timezone: 'Asia/Jakarta' },
   users: [

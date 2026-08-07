@@ -3,7 +3,9 @@
 import { useState, type ReactElement } from "react";
 
 import { getAdminOverview } from "../lib/demo/selectors";
+import { MetricCard } from "./metric-card";
 import { SectionCard } from "./section-card";
+import { SimulationNote } from "./simulation-note";
 import { StatusBadge } from "./status-badge";
 
 type AdminViewProps = { activeNav: string };
@@ -30,6 +32,12 @@ const policyExamples = [
   { key: "policy-offline", name: "Presensi offline", value: "Diizinkan, wajib sinkron < 24 jam" },
 ];
 
+const brandSwatches = [
+  { key: "swatch-primary", label: "Primer", hex: "#b84c2b" },
+  { key: "swatch-dark", label: "Gelap", hex: "#282a25" },
+  { key: "swatch-canvas", label: "Latar", hex: "#f5f0e8" },
+];
+
 export function AdminView({ activeNav }: AdminViewProps) {
   const overview = getAdminOverview();
   const [showEmptyUsers, setShowEmptyUsers] = useState(false);
@@ -50,10 +58,10 @@ export function AdminView({ activeNav }: AdminViewProps) {
           <p>Gambaran konfigurasi tenant demo. Gunakan navigasi untuk meninjau tiap area pengelolaan.</p>
         </div>
         <div className="mgmt-metrics" role="list" aria-label="Ringkasan administrasi">
-          <div className="mgmt-metric" role="listitem"><div><strong>{overview.users.length}</strong><span>Pengguna terdaftar</span></div></div>
-          <div className="mgmt-metric" role="listitem"><div><strong>{overview.teams.length}</strong><span>Tim aktif</span></div></div>
-          <div className="mgmt-metric" role="listitem"><div><strong>{overview.locations.length}</strong><span>Lokasi presensi</span></div></div>
-          <div className="mgmt-metric" role="listitem"><div><strong>{overview.schedules.length}</strong><span>Jadwal kerja</span></div></div>
+          <MetricCard label="Pengguna terdaftar" value={overview.users.length} />
+          <MetricCard label="Tim aktif" value={overview.teams.length} />
+          <MetricCard label="Lokasi presensi" value={overview.locations.length} />
+          <MetricCard label="Jadwal kerja" value={overview.schedules.length} />
         </div>
         <SectionCard eyebrow="Konfigurasi" title="Area pengelolaan">
           <ul className="admin-section-list">
@@ -294,9 +302,12 @@ export function AdminView({ activeNav }: AdminViewProps) {
             </div>
           </div>
           <div className="brand-swatches" role="list" aria-label="Warna merek contoh">
-            <div className="brand-swatch" role="listitem"><span className="brand-swatch__box" style={{ background: "#b84c2b" }} /><span>Primer · #b84c2b</span></div>
-            <div className="brand-swatch" role="listitem"><span className="brand-swatch__box" style={{ background: "#282a25" }} /><span>Gelap · #282a25</span></div>
-            <div className="brand-swatch" role="listitem"><span className="brand-swatch__box" style={{ background: "#f5f0e8" }} /><span>Latar · #f5f0e8</span></div>
+            {brandSwatches.map((swatch) => (
+              <div className="brand-swatch" key={swatch.key} role="listitem">
+                <span className="brand-swatch__box" style={{ background: swatch.hex }} />
+                <span>{swatch.label} · {swatch.hex}</span>
+              </div>
+            ))}
           </div>
           <div className="mgmt-form">
             <label className="mgmt-field" htmlFor="brand-color">
@@ -340,16 +351,8 @@ export function AdminView({ activeNav }: AdminViewProps) {
   const renderSection = sections[activeNav] ?? sections.Ringkasan;
   return (
     <div className="mgmt-view">
-      <SimulationNote />
+      <SimulationNote>Tampilan simulasi — formulir dan tombol administrasi tidak menyimpan perubahan dan tidak memberikan otorisasi apa pun.</SimulationNote>
       {renderSection()}
     </div>
-  );
-}
-
-function SimulationNote() {
-  return (
-    <p className="mgmt-simulation-note" role="note">
-      <span aria-hidden="true">ⓘ</span> Tampilan simulasi — formulir dan tombol administrasi tidak menyimpan perubahan dan tidak memberikan otorisasi apa pun.
-    </p>
   );
 }
