@@ -1,10 +1,38 @@
 import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
-const DEFAULT_ADMIN_URL = 'postgresql://postgres:vortech-dev-pg@127.0.0.1:5432/postgres';
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+
+/** Minimal .env loader: KEY=VALUE lines, # comments, no dotenv dependency. */
+function loadEnvFile(file: string): void {
+  if (!existsSync(file)) return;
+  for (const rawLine of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+}
 
 function adminUrl(): string {
-  return process.env.TEST_DATABASE_ADMIN_URL ?? DEFAULT_ADMIN_URL;
+  loadEnvFile(path.join(repoRoot, '.env'));
+  const url = process.env.TEST_DATABASE_ADMIN_URL;
+  if (!url) {
+    throw new Error('TEST_DATABASE_ADMIN_URL is not set (checked environment and .env)');
+  }
+  return url;
 }
 
 /** Database name embedded in a test database connection URL. */
