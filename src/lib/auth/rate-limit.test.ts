@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkRateLimit, resetRateLimit } from './rate-limit.ts';
+import { __rateLimitInternals, checkRateLimit, resetRateLimit } from './rate-limit.ts';
 
 const WINDOW = 60_000;
 
@@ -64,4 +64,38 @@ test('different keys are independent', () => {
   const other = checkRateLimit('key-y', 2, WINDOW, t0);
   assert.equal(other.allowed, true, 'blocking key-x must not affect key-y');
   assert.equal(other.remaining, 1);
+});
+
+test('expired buckets are evicted once the map exceeds the size threshold, active ones are kept', () => {
+  const base = 10_000_000;
+
+  // Fill beyond the 10_000 threshold with buckets that are all expired by `later`.
+  for (let i = 0; i < 10_001; i++) {
+    checkRateLimit(`expired:${i}`, 5, WINDOW, base);
+  }
+  assert.equal(__rateLimitInternals.has('expired:0'), true, 'precondition: bucket present before sweep');
+  const sizeBefore = __rateLimitInternals.size();
+  assert.ok(sizeBefore > 10_000, `precondition: map exceeds threshold (size=${sizeBefore})`);
+
+  // An active bucket created far in the future relative to `later`.
+  checkRateLimit('active-key', 5, WINDOW, base + 10 * WINDOW);
+
+  // A fresh key at a time when the `expired:*` buckets are stale but
+  // `active-key` is still inside its window. This triggers the lazy sweep.
+  const later = base + 5 * WINDOW;
+  checkRateLimit('trigger-sweep', 5, WINDOW, later);
+
+  // The sweep removed the expired buckets...
+  assert.equal(__rateLimitInternals.has('expired:0'), false, 'expired bucket must be evicted by the sweep');
+  assert.equal(__rateLimitInternals.has('expired:5000'), false, 'all expired buckets must be evicted');
+  assert.ok(
+    __rateLimitInternals.size() < sizeBefore,
+    'map must shrink after evicting expired buckets',
+  );
+
+  // ...but retained the still-active bucket.
+  assert.equal(__rateLimitInternals.has('active-key'), true, 'active bucket must be retained across the sweep');
+  const active = checkRateLimit('active-key', 5, WINDOW, later);
+  assert.equal(active.allowed, true);
+  assert.equal(active.remaining, 3, 'active bucket keeps its consumed attempt (not reset)');
 });

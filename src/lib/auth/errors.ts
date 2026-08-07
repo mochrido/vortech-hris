@@ -19,13 +19,14 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 /** Application error carrying a stable code and an HTTP status. */
 export class AppError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-    public status: number,
-  ) {
+  public code: string;
+  public status: number;
+
+  constructor(code: string, message: string, status: number) {
     super(message);
     this.name = 'AppError';
+    this.code = code;
+    this.status = status;
   }
 }
 

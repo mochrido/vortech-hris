@@ -5,6 +5,9 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const KEY_LENGTH = 32;
 const SALT_LENGTH = 16;
+// Hard ceiling on the scrypt cost factor parsed from a stored hash. Guards
+// against attacker-influenced hashes requesting an absurd amount of memory/CPU.
+const MAX_SCRYPT_N = 1 << 20;
 
 function scryptAsync(
   password: string,
@@ -47,7 +50,9 @@ export async function verifyPassword(stored: string, password: string): Promise<
     const r = Number(parts[2]);
     const p = Number(parts[3]);
     if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p)) return false;
-    if (N <= 1 || (N & (N - 1)) !== 0) return false; // N must be a power of 2 > 1
+    // N must be a positive power of two and within the accepted upper bound,
+    // so a parsed attacker-influenced N can never reach scrypt.
+    if (N <= 1 || N > MAX_SCRYPT_N || (N & (N - 1)) !== 0) return false;
     if (r <= 0 || p <= 0) return false;
 
     const salt = Buffer.from(parts[4], 'base64');

@@ -7,6 +7,17 @@ interface Bucket {
 // deployments must move this to a shared store (e.g. Postgres or Redis).
 const buckets = new Map<string, Bucket>();
 
+// Soft cap on tracked keys. When exceeded, expired buckets are swept so the
+// map cannot grow without bound from a flood of distinct keys.
+const MAX_BUCKETS = 10_000;
+
+/** Removes buckets whose window has already expired as of `now`. */
+function evictExpired(now: number): void {
+  for (const [key, bucket] of buckets) {
+    if (now >= bucket.resetAt) buckets.delete(key);
+  }
+}
+
 export interface RateLimitResult {
   allowed: boolean;
   remaining: number;
@@ -22,6 +33,12 @@ export function checkRateLimit(
   windowMs: number,
   now: number = Date.now(),
 ): RateLimitResult {
+  // Lazy eviction: only sweep when the map grows past the threshold, and only
+  // for a key that isn't already tracked (a fresh insert would grow the map).
+  if (buckets.size > MAX_BUCKETS && !buckets.has(key)) {
+    evictExpired(now);
+  }
+
   let bucket = buckets.get(key);
 
   if (!bucket || now >= bucket.resetAt) {
@@ -41,3 +58,9 @@ export function checkRateLimit(
 export function resetRateLimit(key: string): void {
   buckets.delete(key);
 }
+
+/** Test-only introspection into the in-memory store. Not for application use. */
+export const __rateLimitInternals = {
+  size: () => buckets.size,
+  has: (key: string) => buckets.has(key),
+};

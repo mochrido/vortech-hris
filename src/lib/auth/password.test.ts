@@ -70,3 +70,23 @@ test('verifyPassword returns false (does not throw) for malformed or tampered ha
   const tampered = [...parts.slice(0, 5), keyBytes.toString('base64')].join('$');
   assert.equal(await verifyPassword(tampered, 'real-password'), false);
 });
+
+test('verifyPassword rejects an absurd scrypt N quickly without throwing', async () => {
+  const salt = Buffer.alloc(16, 1).toString('base64');
+  const key = Buffer.alloc(32, 2).toString('base64');
+
+  // Well-formed string but N far above the accepted upper bound (2^20).
+  const hugeN = ['scrypt', String(1 << 30), '8', '1', salt, key].join('$');
+  // N just past the bound: a valid power of two, but 2^21 > 2^20 must be rejected.
+  const overBound = ['scrypt', String(1 << 21), '8', '1', salt, key].join('$');
+  // N not a positive power of two.
+  const notPow2 = ['scrypt', '1000', '8', '1', salt, key].join('$');
+
+  const start = Date.now();
+  assert.equal(await verifyPassword(hugeN, 'pw'), false, 'must reject an N far above the upper bound');
+  assert.equal(await verifyPassword(overBound, 'pw'), false, 'must reject N = 2^21 (> 2^20 upper bound)');
+  assert.equal(await verifyPassword(notPow2, 'pw'), false, 'must reject a non-power-of-two N');
+  const elapsed = Date.now() - start;
+
+  assert.ok(elapsed < 500, `must reject without invoking scrypt (took ${elapsed}ms)`);
+});
