@@ -1,0 +1,81 @@
+name: vortech-hris
+
+services:
+  web:
+    build: .
+    image: vortech-hris-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override the DB host to reach the in-compose Postgres service.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vortech}:${POSTGRES_PASSWORD:-vortech}@postgres:5432/${POSTGRES_DB:-vortech}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "3000"
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vortech}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vortech}
+      POSTGRES_DB: ${POSTGRES_DB:-vortech}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    networks:
+      - internal
+
+  # Scheduled retention / auto-checkout jobs. These run the SAME web image so
+  # the job code ships with the app. The job itself is implemented in Phase 1+;
+  # this Phase 0 placeholder just proves the wiring. Run with:
+  #   docker compose --profile jobs run --rm jobs
+  jobs:
+    image: vortech-hris-web
+    profiles:
+      - jobs
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vortech}:${POSTGRES_PASSWORD:-vortech}@postgres:5432/${POSTGRES_DB:-vortech}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Phase 0 placeholder; replace with the real retention/auto-checkout
+    # command once the job lands (Phase 1+).
+    command: ["node", "-e", "console.log('jobs: retention/auto-checkout not yet implemented (Phase 1+)')"]
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

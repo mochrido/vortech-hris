@@ -1,0 +1,20 @@
+# Caddy reverse proxy + automatic HTTPS for the app.
+# DOMAIN is provided via the environment (see .env.example). Caddy obtains and
+# renews TLS certificates automatically for the configured domain.
+
+{$DOMAIN} {
+	reverse_proxy web:3000
+
+	# Security headers (defense in depth; the app also sets its own).
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Path-based tenancy (/{tenant-slug}/...) is handled at the app layer; Caddy
+	# simply proxies all paths through to the web service untouched.
+
+	encode zstd gzip
+}
