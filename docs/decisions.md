@@ -49,3 +49,15 @@ If a decision changes, update this file and note the change in `CHANGELOG.md`.
     `superadmin` row in `user_roles`, never from the tenant. Superadmin CRUD endpoints are
     role-checked, non-tenant-scoped paths. **Caveat:** tenant-level reporting and metrics
     must explicitly exclude the platform tenant to avoid skewing counts.
+
+## Attendance enforcement
+
+12. **Accuracy vs. geofence precedence (PRD 7.5)** — Poor GPS accuracy (> 50 m after retries)
+    and geofence inside/outside are **independent facts**, not an either/or verdict. The
+    mandatory-geofence **block always applies** when a worker is outside all assigned
+    locations, even if accuracy was poor; the accuracy anomaly is still recorded. Concretely:
+    - `mandatory` + outside (any accuracy) → **blocked**; accuracy anomaly recorded when poor.
+    - `mandatory` + inside + poor accuracy → accepted, flagged `needs_review` (accuracy).
+    - `optional` (field_worker) → always accepted; the verdict records **both** the accuracy
+      flag and the inside/outside fact for review context.
+    The verdict type must carry the accuracy anomaly separately from the inside/outside result.
