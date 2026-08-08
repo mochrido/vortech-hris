@@ -152,3 +152,49 @@ test('POST /auth/login: malformed body → 400 VALIDATION_FAILED', async (t) => 
     assert.equal(body.code, 'VALIDATION_FAILED');
   });
 });
+
+test('POST /auth/login: over-long password → 400 VALIDATION_FAILED (no scrypt amplification)', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv(envFor(fixture), async () => {
+    const slug = `acme-${randomBytes(3).toString('hex')}`;
+    await seedUser(fixture.pool, slug, 'toolong@example.com');
+
+    const res = await POST(
+      loginRequest({ tenantSlug: slug, identifier: 'toolong@example.com', password: 'p'.repeat(257) }),
+    );
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, 'VALIDATION_FAILED');
+    assert.equal(res.headers.getSetCookie().length, 0, 'no session cookie on validation failure');
+  });
+});
+
+test('POST /auth/login: over-long identifier → 400 VALIDATION_FAILED', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv(envFor(fixture), async () => {
+    const slug = `acme-${randomBytes(3).toString('hex')}`;
+    await seedUser(fixture.pool, slug, 'toolong2@example.com');
+
+    const res = await POST(
+      loginRequest({ tenantSlug: slug, identifier: `${'a'.repeat(321)}@example.com`, password: PASSWORD }),
+    );
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, 'VALIDATION_FAILED');
+  });
+});
+
+test('POST /auth/login: missing proxy headers → no client IP, still authenticates (IP limiter skipped)', async (t) => {
+  const fixture = await setupDb(t);
+  await withEnv(envFor(fixture), async () => {
+    const slug = `acme-${randomBytes(3).toString('hex')}`;
+    const { userId } = await seedUser(fixture.pool, slug, 'noip@example.com');
+
+    // No x-forwarded-for / x-real-ip → extractClientIp returns undefined. The
+    // request must still succeed and must not be funneled into a shared bucket.
+    const res = await POST(loginRequest({ tenantSlug: slug, identifier: 'noip@example.com', password: PASSWORD }));
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.user.id, userId);
+  });
+});

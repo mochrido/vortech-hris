@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server.js';
 import type { NextRequest } from 'next/server.js';
 import { AppError, ErrorCodes } from '../../../../../lib/auth/errors.ts';
-import { login } from '../../../../../lib/auth/login.ts';
+import { login, LOGIN_MAX_IDENTIFIER_LENGTH, LOGIN_MAX_PASSWORD_LENGTH } from '../../../../../lib/auth/login.ts';
 import { extractClientIp, jsonError } from '../../../../../lib/api/http.ts';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +40,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         'tenantSlug, identifier and password are required',
         400,
       );
+    }
+
+    // Cap input length before any hashing/lookup (scrypt CPU-amplification guard).
+    if (identifier.length > LOGIN_MAX_IDENTIFIER_LENGTH || password.length > LOGIN_MAX_PASSWORD_LENGTH) {
+      throw new AppError(ErrorCodes.VALIDATION_FAILED, 'Identifier or password is too long', 400);
     }
 
     const result = await login(tenantSlug, identifier, password, {
