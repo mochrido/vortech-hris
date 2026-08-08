@@ -316,6 +316,42 @@ test('POST /attendance/events: unauthenticated request returns 401', async (t) =
   });
 });
 
+test('POST /attendance/events: tenant scope comes from the session — a tenant-B session cannot write into tenant A', async (t) => {
+  const fx = await setup(t);
+  await withEnv(envFor(fx), async () => {
+    // Two fully-provisioned tenants, each with a member + schedule + location.
+    const a = await seedMember(fx);
+    const b = await seedMember(fx);
+    assert.notEqual(a.tenantId, b.tenantId, 'distinct tenants seeded');
+
+    // Authenticate as tenant B's user. The metadata JSON even carries a decoy
+    // tenantId pointing at tenant A; the route parses NO tenantId from metadata
+    // (scope is session-derived), so it must be ignored entirely.
+    const metadata = {
+      eventType: 'check_in',
+      idempotencyKey: 'k-xtenant',
+      deviceOccurredAt: CHECKIN_AT,
+      ...INSIDE,
+      tenantId: a.tenantId, // decoy: must be ignored
+    };
+    const res = await postEvent(authedReq('http://localhost/api/v1/attendance/events', b.token, { method: 'POST', body: multipart(metadata, SELFIE) }));
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.equal(body.created, true);
+
+    // The created event belongs to tenant B and tenant B's user — never A.
+    assert.equal(body.event.tenant_id, b.tenantId, 'event tenant_id is the session tenant (B), not the decoy (A)');
+    assert.notEqual(body.event.tenant_id, a.tenantId);
+    assert.equal(body.event.user_id, b.userId, 'event user_id is the session user (B)');
+
+    // The DB agrees: the row was written under tenant B, and tenant A has none.
+    const bRows = await fx.pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM attendance_events WHERE tenant_id = $1`, [b.tenantId]);
+    assert.equal(Number(bRows.rows[0].count), 1, 'exactly one event written, under tenant B');
+    const aRows = await fx.pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM attendance_events WHERE tenant_id = $1`, [a.tenantId]);
+    assert.equal(Number(aRows.rows[0].count), 0, 'no event row created under tenant A');
+  });
+});
+
 test('GET /attendance/events/[id]: returns the event for the owner only', async (t) => {
   const fx = await setup(t);
   await withEnv(envFor(fx), async () => {
