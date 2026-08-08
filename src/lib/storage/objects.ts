@@ -18,12 +18,37 @@
  * SECURITY BOUNDARY: every path resolved by this module is constrained to
  * STORAGE_DIR; `..`, absolute paths, and non-UUID object ids are rejected
  * before touching the filesystem (path traversal defense).
+ *
+ * HARDENING (code-quality review):
+ *   - ATOMIC WRITES: blobs are written to a temp file in the same directory
+ *     and then renamed onto the final path (atomic on the same volume), so a
+ *     crash mid-write never leaves a truncated blob at the final path.
+ *   - NO ORPHAN BLOBS: if the `stored_objects` INSERT fails after the file
+ *     landed, the file is unlinked (best-effort) before the error propagates.
+ *   - INTEGRITY ON READ: readObject recomputes the sha256 of the bytes on
+ *     disk and refuses to serve them when it mismatches the stored value
+ *     (bit rot / tampering is detected, not echoed back).
+ *   - MEDIA-TYPE ALLOWLIST: only SERVABLE_MEDIA_TYPES may be stored, and
+ *     readObject only ever returns an allowlisted Content-Type (anything
+ *     else — e.g. a legacy text/html row — is served as
+ *     application/octet-stream). This protects the Task 7 serving endpoint
+ *     from content-sniffing/XSS via a stored HTML blob.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Queryable } from '../db/queryable.ts';
+
+/**
+ * Media types this module will store and serve back as Content-Type.
+ * Anything else is rejected on write and coerced to
+ * `application/octet-stream` on read (see the module header).
+ */
+const SERVABLE_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+/** Safe fallback Content-Type for stored rows outside the allowlist. */
+const FALLBACK_MEDIA_TYPE = 'application/octet-stream';
 
 const EXTENSION_BY_MEDIA_TYPE: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -92,6 +117,9 @@ export async function storeObject(client: Queryable, args: StoreObjectArgs): Pro
   if (!UUID_RE.test(args.tenantId)) {
     throw new Error(`invalid tenant id: ${args.tenantId}`);
   }
+  if (!SERVABLE_MEDIA_TYPES.has(args.mediaType)) {
+    throw new Error(`media type is not servable: ${args.mediaType}`);
+  }
 
   const id = randomUUID();
   const extension = EXTENSION_BY_MEDIA_TYPE[args.mediaType] ?? '.bin';
@@ -102,14 +130,33 @@ export async function storeObject(client: Queryable, args: StoreObjectArgs): Pro
   // The blob is data, never executable content (PRD §14): it lives outside
   // the web root and is only ever streamed back by an authorized endpoint.
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fs.writeFile(absolutePath, args.buffer);
+
+  // Atomic publish: write to a temp file in the SAME directory, then rename
+  // (atomic on the same volume) so a crash mid-write can never leave a
+  // truncated blob at the final path. The temp name is UUID-suffixed so
+  // concurrent stores never collide.
+  const tempPath = `${absolutePath}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tempPath, args.buffer);
+    await fs.rename(tempPath, absolutePath);
+  } catch (err) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
 
   const sha256 = createHash('sha256').update(args.buffer).digest('hex');
-  await client.query(
-    `INSERT INTO stored_objects (id, tenant_id, kind, relative_path, media_type, byte_size, sha256)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [id, args.tenantId, args.kind, relativePath, args.mediaType, args.buffer.length, sha256],
-  );
+  try {
+    await client.query(
+      `INSERT INTO stored_objects (id, tenant_id, kind, relative_path, media_type, byte_size, sha256)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, args.tenantId, args.kind, relativePath, args.mediaType, args.buffer.length, sha256],
+    );
+  } catch (err) {
+    // The row never landed: remove the just-written blob so it cannot
+    // orphan on disk, then let the original error propagate.
+    await fs.unlink(absolutePath).catch(() => {});
+    throw err;
+  }
 
   return { id, relativePath };
 }
@@ -129,13 +176,19 @@ export interface ReadObjectResult {
  * Reads back a stored object, scoped to `tenantId` (an object belonging to
  * another tenant is indistinguishable from a missing one). The file path
  * comes from the DB row, re-validated against the storage root.
+ *
+ * The sha256 recorded at store time is recomputed over the bytes on disk; a
+ * mismatch means the blob was corrupted or tampered with after the fact and
+ * throws instead of serving bad bytes. The returned media type is always
+ * allowlisted (legacy rows fall back to application/octet-stream) so the
+ * Task 7 serving endpoint can use it directly as Content-Type.
  */
 export async function readObject(client: Queryable, args: ReadObjectArgs): Promise<ReadObjectResult> {
   if (!UUID_RE.test(args.id)) {
     throw new Error('object not found');
   }
-  const rows = await client.query<{ relative_path: string; media_type: string; deleted_at: Date | null }>(
-    `SELECT relative_path, media_type, deleted_at FROM stored_objects WHERE id = $1 AND tenant_id = $2`,
+  const rows = await client.query<{ relative_path: string; media_type: string; sha256: string; deleted_at: Date | null }>(
+    `SELECT relative_path, media_type, sha256, deleted_at FROM stored_objects WHERE id = $1 AND tenant_id = $2`,
     [args.id, args.tenantId],
   );
   const row = rows.rows[0];
@@ -144,5 +197,10 @@ export async function readObject(client: Queryable, args: ReadObjectArgs): Promi
   }
   const absolutePath = getObjectPath(row.relative_path, args.storageDir);
   const buffer = await fs.readFile(absolutePath);
-  return { buffer, mediaType: row.media_type };
+  const actualSha256 = createHash('sha256').update(buffer).digest('hex');
+  if (actualSha256 !== row.sha256) {
+    throw new Error(`object failed integrity check (sha256 mismatch): ${args.id}`);
+  }
+  const mediaType = SERVABLE_MEDIA_TYPES.has(row.media_type) ? row.media_type : FALLBACK_MEDIA_TYPE;
+  return { buffer, mediaType };
 }

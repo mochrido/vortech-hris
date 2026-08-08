@@ -45,6 +45,13 @@ async function setupStorageDir(t: test.TestContext): Promise<string> {
   return dir;
 }
 
+/** Lists regular files (not directories) directly inside `dir`. */
+async function listFiles(dir: string): Promise<string[]> {
+  return (await fs.readdir(dir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name);
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 test('objects: storeObject writes an opaque-UUID file under STORAGE_DIR and inserts a stored_objects row', async (t) => {
@@ -69,6 +76,9 @@ test('objects: storeObject writes an opaque-UUID file under STORAGE_DIR and inse
   const onDisk = await fs.readFile(absolute);
   assert.deepEqual(onDisk, buffer);
 
+  // Atomic write: the rename leaves no temp-file litter in the object directory.
+  assert.deepEqual(await listFiles(path.dirname(absolute)), [path.basename(absolute)]);
+
   // Row persisted with correct metadata.
   const rows = await fixture.pool.query<{
     id: string;
@@ -89,6 +99,64 @@ test('objects: storeObject writes an opaque-UUID file under STORAGE_DIR and inse
   assert.equal(row.sha256, createHash('sha256').update(buffer).digest('hex'));
 });
 
+test('objects: storeObject rejects a media type outside the servable allowlist before touching disk or DB', async (t) => {
+  const fixture = await setupDb(t);
+  const storageDir = await setupStorageDir(t);
+
+  await assert.rejects(
+    storeObject(fixture.pool, {
+      tenantId: fixture.tenantId,
+      kind: 'selfie',
+      buffer: Buffer.from('<script>alert(1)</script>'),
+      mediaType: 'text/html',
+      storageDir,
+    }),
+    /media type/i,
+  );
+
+  // Nothing written, nothing inserted.
+  assert.deepEqual(await fs.readdir(storageDir), []);
+  const rows = await fixture.pool.query(`SELECT id FROM stored_objects`);
+  assert.equal(rows.rows.length, 0);
+});
+
+test('objects: a failed insert cleans up the just-written file (no orphan blob, no temp litter)', async (t) => {
+  const fixture = await setupDb(t);
+  const storageDir = await setupStorageDir(t);
+
+  // Force the INSERT to fail: this wrapper rewrites the media_type parameter
+  // to null, violating the column's NOT NULL constraint. storeObject must
+  // then unlink the blob it just published instead of orphaning it.
+  const failingClient: pg.Pool = Object.create(fixture.pool, {
+    query: {
+      value: (sql: string, params?: unknown[]) =>
+        typeof sql === 'string' && sql.includes('INSERT INTO stored_objects')
+          ? fixture.pool.query(sql, [params![0], params![1], params![2], params![3], null, params![5], params![6]])
+          : fixture.pool.query(sql, params),
+    },
+  });
+
+  const kindDir = path.join(path.resolve(storageDir), 'selfie');
+  await assert.rejects(
+    storeObject(failingClient, {
+      tenantId: fixture.tenantId,
+      kind: 'selfie',
+      buffer: Buffer.from('blob-that-must-not-orphan'),
+      mediaType: 'image/jpeg',
+      storageDir,
+    }),
+  );
+
+  // The blob was unlinked and the temp file was renamed away: nothing remains.
+  const kindDirEntries = await fs.readdir(kindDir).catch(() => null);
+  assert.ok(
+    kindDirEntries === null || kindDirEntries.length === 0,
+    `expected no orphan files in ${kindDir}, found: ${kindDirEntries}`,
+  );
+  const rows = await fixture.pool.query(`SELECT id FROM stored_objects`);
+  assert.equal(rows.rows.length, 0);
+});
+
 test('objects: readObject returns the stored bytes for a known id', async (t) => {
   const fixture = await setupDb(t);
   const storageDir = await setupStorageDir(t);
@@ -105,6 +173,49 @@ test('objects: readObject returns the stored bytes for a known id', async (t) =>
   const read = await readObject(fixture.pool, { tenantId: fixture.tenantId, id: stored.id, storageDir });
   assert.deepEqual(read.buffer, buffer);
   assert.equal(read.mediaType, 'image/jpeg');
+});
+
+test('objects: readObject detects on-disk corruption via the stored sha256', async (t) => {
+  const fixture = await setupDb(t);
+  const storageDir = await setupStorageDir(t);
+
+  const stored = await storeObject(fixture.pool, {
+    tenantId: fixture.tenantId,
+    kind: 'selfie',
+    buffer: Buffer.from('pristine-bytes'),
+    mediaType: 'image/jpeg',
+    storageDir,
+  });
+
+  // Tamper with the blob after it was stored (bit rot / partial restore).
+  const absolute = getObjectPath(stored.relativePath, storageDir);
+  await fs.writeFile(absolute, Buffer.from('corrupted-bytes!'));
+
+  await assert.rejects(
+    readObject(fixture.pool, { tenantId: fixture.tenantId, id: stored.id, storageDir }),
+    /integrity|sha256|corrupt/i,
+  );
+});
+
+test('objects: readObject falls back to application/octet-stream for a pre-allowlist media type', async (t) => {
+  const fixture = await setupDb(t);
+  const storageDir = await setupStorageDir(t);
+  const buffer = Buffer.from('legacy-html-bytes');
+
+  const stored = await storeObject(fixture.pool, {
+    tenantId: fixture.tenantId,
+    kind: 'selfie',
+    buffer,
+    mediaType: 'image/jpeg',
+    storageDir,
+  });
+
+  // Simulate a row stored before the allowlist existed (e.g. text/html).
+  await fixture.pool.query(`UPDATE stored_objects SET media_type = 'text/html' WHERE id = $1`, [stored.id]);
+
+  const read = await readObject(fixture.pool, { tenantId: fixture.tenantId, id: stored.id, storageDir });
+  assert.deepEqual(read.buffer, buffer);
+  assert.equal(read.mediaType, 'application/octet-stream');
 });
 
 test('objects: getObjectPath resolves a stored relative_path inside STORAGE_DIR', async (t) => {
