@@ -1,15 +1,8 @@
 import type pg from 'pg';
+import type { Queryable } from '../db/queryable.ts';
 import { getEffectiveSchedule, type EffectiveSchedule } from './schedule.ts';
 import { getEffectivePolicy, evaluateGeofence, verdictToOutcome, type GeofenceVerdict, type GeoLocationWithId } from './geofence.ts';
 import { lateMinutes, workedMinutes } from './calc.ts';
-
-/** Minimal queryable surface shared by pg.Pool, pg.Client and pg.PoolClient. */
-interface Queryable {
-  query<R extends pg.QueryResultRow = pg.QueryResultRow>(
-    text: string,
-    params?: unknown[],
-  ): Promise<pg.QueryResult<R>>;
-}
 
 /** A pg.Pool additionally exposes connect(); a PoolClient does not. */
 interface PoolLike extends Queryable {
@@ -132,23 +125,22 @@ function deriveGeofenceResult(verdict: GeofenceVerdict): string {
   return verdict.inside ? 'inside' : 'outside';
 }
 
-/** Maps a work-instance row portion to the public WorkInstanceRow shape. */
-function toWorkInstance(row: {
-  id: string;
-  tenant_id: string;
-  user_id: string;
-  work_date: string;
-  schedule_id: string;
-  scheduled_start_at: Date;
-  scheduled_end_at: Date;
-  status: string;
-  check_in_event_id: string | null;
-  check_out_event_id: string | null;
-  worked_minutes: number | null;
-  late_minutes: number;
-  review_status: string;
-}): WorkInstanceRow {
-  return { ...row };
+/** True when `error` is a Postgres unique-constraint violation (SQLSTATE 23505). */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '23505';
+}
+
+/** True when `error` is a Postgres foreign-key violation (SQLSTATE 23503). */
+function isForeignKeyViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '23503';
+}
+
+/** True when the unique violation hit the (tenant_id, user_id, idempotency_key) constraint. */
+function isIdempotencyViolation(error: unknown): boolean {
+  return (
+    isUniqueViolation(error) &&
+    (error as { constraint?: unknown }).constraint === 'attendance_events_tenant_user_idempotency_key'
+  );
 }
 
 async function insertAudit(
@@ -189,12 +181,20 @@ async function insertAnomaly(
   );
 }
 
+// TODO(Task 5/7): `selfieRequired` from the resolved policy is not yet
+// enforced (selfie capture/verification is Task 5/7 scope), and
+// `locationAcquiredAt` freshness is not yet checked against the event time.
+
 /**
  * Records an attendance event (check-in / check-out) transactionally.
  *
  * Behavior (PRD 7.5 / 7.6, decisions.md #12):
  * - Idempotency: a repeated (tenant_id, user_id, idempotency_key) returns the
- *   ORIGINAL event with `created:false` and inserts nothing.
+ *   ORIGINAL event with `created:false` and inserts nothing. A CONCURRENT
+ *   insert racing past the idempotency lookup hits the unique constraint
+ *   (SQLSTATE 23505); the violation is caught and the original event is
+ *   re-read and returned with `created:false` instead of surfacing a raw
+ *   database error.
  * - Blocked: a mandatory-geofence worker outside all assigned locations (or
  *   with no GPS fix) is rejected BEFORE any event/work-instance write.
  * - First-event-wins: the first accepted check-in wins; a second DIFFERENT
@@ -223,7 +223,13 @@ export async function recordAttendanceEvent(
       await tx.query('COMMIT');
       return result;
     } catch (error) {
-      await tx.query('ROLLBACK');
+      // A failed ROLLBACK (e.g. lost connection) must not mask the primary
+      // error: swallow it and rethrow the original.
+      try {
+        await tx.query('ROLLBACK');
+      } catch {
+        // Ignore: the primary error below is the actionable one.
+      }
       throw error;
     } finally {
       tx.release();
@@ -232,11 +238,15 @@ export async function recordAttendanceEvent(
   return runRecord(client, args);
 }
 
-async function runRecord(
+/**
+ * Re-runs the idempotency lookup and, when a row exists, returns the
+ * idempotent-replay result (`created:false` with the original event and its
+ * work instance). Returns `null` when no row is stored under the key.
+ */
+async function findExistingResult(
   tx: Queryable,
   args: RecordAttendanceEventArgs,
-): Promise<RecordAttendanceEventResult> {
-  // (a) Idempotency lookup: same key → return the original event.
+): Promise<RecordAttendanceEventResult | null> {
   const existing = await tx.query<IdempotencyRow>(
     `SELECT e.*,
             wi.id AS wi_id,
@@ -257,30 +267,45 @@ async function runRecord(
     [args.tenantId, args.userId, args.idempotencyKey],
   );
 
-  if (existing.rows.length > 0) {
-    const row = existing.rows[0];
-    const workInstance: WorkInstanceRow = {
-      id: row.wi_id,
-      tenant_id: row.tenant_id,
-      user_id: row.user_id,
-      work_date: row.wi_work_date,
-      schedule_id: row.wi_schedule_id,
-      scheduled_start_at: row.wi_scheduled_start_at,
-      scheduled_end_at: row.wi_scheduled_end_at,
-      status: row.wi_status,
-      check_in_event_id: row.wi_check_in_event_id,
-      check_out_event_id: row.wi_check_out_event_id,
-      worked_minutes: row.wi_worked_minutes,
-      late_minutes: row.wi_late_minutes,
-      review_status: row.wi_review_status,
-    };
-    const event = toEvent(row);
-    return {
-      created: false,
-      outcome: event.status === 'needs_review' ? 'needs_review' : 'accepted',
-      event,
-      workInstance,
-    };
+  if (existing.rows.length === 0) {
+    return null;
+  }
+
+  const row = existing.rows[0];
+  const workInstance: WorkInstanceRow = {
+    id: row.wi_id,
+    tenant_id: row.tenant_id,
+    user_id: row.user_id,
+    work_date: row.wi_work_date,
+    schedule_id: row.wi_schedule_id,
+    scheduled_start_at: row.wi_scheduled_start_at,
+    scheduled_end_at: row.wi_scheduled_end_at,
+    status: row.wi_status,
+    check_in_event_id: row.wi_check_in_event_id,
+    check_out_event_id: row.wi_check_out_event_id,
+    worked_minutes: row.wi_worked_minutes,
+    late_minutes: row.wi_late_minutes,
+    review_status: row.wi_review_status,
+  };
+  // The event columns of the joined row ARE the persisted attendance_events
+  // row (SELECT e.*); reuse them directly as the public event shape.
+  const event: AttendanceEventRow = { ...row };
+  return {
+    created: false,
+    outcome: event.status === 'needs_review' ? 'needs_review' : 'accepted',
+    event,
+    workInstance,
+  };
+}
+
+async function runRecord(
+  tx: Queryable,
+  args: RecordAttendanceEventArgs,
+): Promise<RecordAttendanceEventResult> {
+  // (a) Idempotency lookup: same key → return the original event.
+  const replay = await findExistingResult(tx, args);
+  if (replay) {
+    return replay;
   }
 
   // Load the user + tenant for policy resolution.
@@ -320,7 +345,9 @@ async function runRecord(
   }
 
   // (c) Resolve policy + evaluate geofence against assigned active locations.
-  const policy = await getEffectivePolicy(tx, user, tenant);
+  //     The policy must be the one effective on the resolved WORK DATE, not
+  //     on the server's current date (backdated / cross-midnight events).
+  const policy = await getEffectivePolicy(tx, user, tenant, schedule.workDate);
   const locationResult = await tx.query<LocationRow>(
     `SELECT l.id, l.latitude::text AS latitude, l.longitude::text AS longitude, l.radius_m
        FROM user_locations ul
@@ -375,7 +402,7 @@ async function runRecord(
 
   let workInstance: WorkInstanceRow;
   if (wiInsert.rows.length > 0) {
-    workInstance = toWorkInstance(wiInsert.rows[0]);
+    workInstance = wiInsert.rows[0];
   } else {
     const wiSelect = await tx.query<WorkInstanceRow>(
       `SELECT id, tenant_id, user_id, work_date::text AS work_date, schedule_id,
@@ -385,7 +412,7 @@ async function runRecord(
         WHERE tenant_id = $1 AND user_id = $2 AND work_date = $3 AND schedule_id = $4`,
       [args.tenantId, args.userId, schedule.workDate, schedule.scheduleId],
     );
-    workInstance = toWorkInstance(wiSelect.rows[0]);
+    workInstance = wiSelect.rows[0];
   }
 
   // (f) First-event-wins enforcement.
@@ -436,32 +463,74 @@ async function runRecord(
   // a float, so round to the nearest whole meter (undefined stays NULL).
   const distanceM = verdict.distanceM === undefined ? null : Math.round(verdict.distanceM);
 
-  const eventInsert = await tx.query<AttendanceEventRow>(
-    `INSERT INTO attendance_events (
-       tenant_id, user_id, work_instance_id, event_type, idempotency_key,
-       device_occurred_at, source, latitude, longitude, accuracy_m, distance_m,
-       location_id, geofence_result, selfie_object_id, clock_offset_ms, status
-     ) VALUES ($1, $2, $3, $4, $5, $6, 'web_online', $7, $8, $9, $10, $11, $12, $13, $14, $15)
-     RETURNING *`,
-    [
-      args.tenantId,
-      args.userId,
-      workInstance.id,
-      args.eventType,
-      args.idempotencyKey,
-      args.deviceOccurredAt,
-      args.latitude,
-      args.longitude,
-      args.accuracyM,
-      distanceM,
-      verdict.locationId ?? null,
-      geofenceResult,
-      args.selfieObjectId,
-      args.clockOffsetMs,
-      status,
-    ],
-  );
-  const event = toEvent(eventInsert.rows[0]);
+  // A constraint violation would normally abort the whole transaction
+  // (SQLSTATE 25P02), so run the insert behind a SAVEPOINT: on a handled
+  // violation we roll back ONLY to the savepoint and keep the enclosing
+  // transaction usable. Unrelated errors propagate and roll everything back.
+  await tx.query('SAVEPOINT attendance_event_insert');
+  let event: AttendanceEventRow;
+  try {
+    const eventInsert = await tx.query<AttendanceEventRow>(
+      `INSERT INTO attendance_events (
+         tenant_id, user_id, work_instance_id, event_type, idempotency_key,
+         device_occurred_at, source, latitude, longitude, accuracy_m, distance_m,
+         location_id, geofence_result, selfie_object_id, clock_offset_ms, status
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'web_online', $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING *`,
+      [
+        args.tenantId,
+        args.userId,
+        workInstance.id,
+        args.eventType,
+        args.idempotencyKey,
+        args.deviceOccurredAt,
+        args.latitude,
+        args.longitude,
+        args.accuracyM,
+        distanceM,
+        verdict.locationId ?? null,
+        geofenceResult,
+        args.selfieObjectId,
+        args.clockOffsetMs,
+        status,
+      ],
+    );
+    event = eventInsert.rows[0];
+  } catch (error) {
+    if (isUniqueViolation(error) || isForeignKeyViolation(error)) {
+      // Undo only the failed insert so the transaction stays usable.
+      await tx.query('ROLLBACK TO SAVEPOINT attendance_event_insert');
+      if (isIdempotencyViolation(error)) {
+        // A concurrent submission with the same idempotency key won the race
+        // and committed first. Re-run the idempotency lookup and return the
+        // original event instead of surfacing a raw 23505 error.
+        const replay = await findExistingResult(tx, args);
+        if (replay) {
+          return replay;
+        }
+        // The winner rolled back or was not visible: the row no longer
+        // exists, so fall through to rethrow the violation rather than
+        // silently swallowing it.
+      } else if (isForeignKeyViolation(error)) {
+        // First-event-wins race (or a work-instance link removed mid-write):
+        // reject cleanly instead of surfacing a raw 23503 error.
+        await insertAudit(tx, {
+          tenantId: args.tenantId,
+          actorUserId: args.userId,
+          action: 'attendance.event.rejected',
+          entityType: 'attendance_event',
+          entityId: workInstance.id,
+          reason: 'event_insert_conflict',
+          after: { event_type: args.eventType, idempotency_key: args.idempotencyKey },
+        });
+        return { created: false, outcome: 'rejected', workInstance, verdict };
+      }
+    }
+    // Anything else (including an idempotency race whose winner vanished) is
+    // not ours to interpret: rethrow so the whole write rolls back.
+    throw error;
+  }
+  await tx.query('RELEASE SAVEPOINT attendance_event_insert');
 
   // (h) Update the work instance links + computed minutes + review status.
   let reviewStatus = workInstance.review_status;
@@ -482,7 +551,7 @@ async function runRecord(
                   check_out_event_id, worked_minutes, late_minutes, review_status`,
       [event.id, late, reviewStatus, workInstance.id],
     );
-    workInstance = toWorkInstance(updated.rows[0]);
+    workInstance = updated.rows[0];
   } else {
     // check_out: compute worked minutes from the linked check-in.
     const checkInEvent = await tx.query<{ device_occurred_at: Date }>(
@@ -503,7 +572,7 @@ async function runRecord(
                   check_out_event_id, worked_minutes, late_minutes, review_status`,
       [event.id, worked, reviewStatus, workInstance.id],
     );
-    workInstance = toWorkInstance(updated.rows[0]);
+    workInstance = updated.rows[0];
   }
 
   // (i) Insert anomalies.
@@ -556,9 +625,4 @@ async function runRecord(
     workInstance,
     verdict,
   };
-}
-
-/** Normalizes a raw attendance_events row (RETURNING *) to the public shape. */
-function toEvent(row: AttendanceEventRow): AttendanceEventRow {
-  return { ...row };
 }

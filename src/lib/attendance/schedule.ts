@@ -1,4 +1,4 @@
-import type pg from 'pg';
+import type { Queryable } from '../db/queryable.ts';
 
 /**
  * The resolved effective schedule for a user at a given instant.
@@ -29,14 +29,6 @@ export interface EffectiveSchedule {
   graceMinutes: number;
   breakMinutes: number;
   isHoliday: boolean;
-}
-
-/** Minimal queryable surface shared by pg.Pool, pg.Client and pg.PoolClient. */
-interface Queryable {
-  query<R extends pg.QueryResultRow = pg.QueryResultRow>(
-    text: string,
-    params?: unknown[],
-  ): Promise<pg.QueryResult<R>>;
 }
 
 const MINUTES_PER_DAY = 24 * 60;

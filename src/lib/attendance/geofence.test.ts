@@ -268,6 +268,38 @@ test('getEffectivePolicy resolves overlapping active assignments to the latest e
   assert.equal(policy.maxAccuracyM, 40);
 });
 
+// I-2 — the policy must be the one effective on the given (work) date, not on
+// the server's current date: an assignment that is future-dated relative to
+// CURRENT_DATE must win when the passed effective date falls inside its range.
+test('getEffectivePolicy honors the passed effective date over CURRENT_DATE (I-2)', async (t) => {
+  const fixture = await setupDb(t);
+  const tenantId = await insertTenant(fixture.pool, 'effdate');
+  const userId = await insertUser(fixture.pool, tenantId, 'eff@effdate.test', 'employee');
+  const futurePolicyId = await insertPolicy(fixture.pool, tenantId, {
+    name: 'Future Optional',
+    geofenceMode: 'optional',
+    maxAccuracyM: 20,
+  });
+  // Future-dated relative to CURRENT_DATE, so it never applies "today"...
+  await assignPolicy(fixture.pool, userId, futurePolicyId, FUTURE, null);
+  const tenant = { id: tenantId, max_accuracy_m: 50 };
+  const user = { id: userId, tenant_id: tenantId, employment_type: 'employee' };
+
+  // ...but passing a work date inside its range resolves it.
+  const onWorkDate = await getEffectivePolicy(fixture.pool, user, tenant, FUTURE);
+  assert.equal(onWorkDate.geofenceMode, 'optional');
+  assert.equal(onWorkDate.maxAccuracyM, 20);
+
+  // Default (no effective date) keeps CURRENT_DATE behavior: not yet active.
+  const today = await getEffectivePolicy(fixture.pool, user, tenant);
+  assert.equal(today.geofenceMode, 'mandatory');
+  assert.equal(today.maxAccuracyM, 50);
+
+  // A date before the assignment's effective_from also ignores it.
+  const before = await getEffectivePolicy(fixture.pool, user, tenant, PAST);
+  assert.equal(before.geofenceMode, 'mandatory');
+});
+
 // ---------------------------------------------------------------------------
 // evaluateGeofence
 // ---------------------------------------------------------------------------

@@ -98,6 +98,34 @@ async function assignSchedule(pool: pg.Pool, userId: string, scheduleId: string)
   );
 }
 
+/** Cross-midnight night schedule 22:00-07:00, grace 10, break 60, Mon-Sat.
+ *  The 07:00 end keeps a 06:10 check-out within the shift window (< end_local),
+ *  so it attributes to the PRIOR work date; a 22:00-06:00 shift ends at 06:00
+ *  and a 06:10 event would already land on the next date. */
+async function insertNightSchedule(pool: pg.Pool, tenantId: string): Promise<string> {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO schedules (tenant_id, name, timezone, start_local, end_local, crosses_midnight, grace_minutes, break_minutes)
+     VALUES ($1, $2, $3, $4, $5, true, $6, $7) RETURNING id`,
+    [tenantId, 'Night Shift', TZ, '22:00', '07:00', GRACE_MINUTES, BREAK_MINUTES],
+  );
+  const scheduleId = result.rows[0].id;
+  for (const weekday of [1, 2, 3, 4, 5, 6]) {
+    await pool.query(`INSERT INTO schedule_days (schedule_id, weekday) VALUES ($1, $2)`, [scheduleId, weekday]);
+  }
+  return scheduleId;
+}
+
+/** Seeds a mandatory (employee) worker on the night schedule inside the geofence. */
+async function seedNightWorker(pool: pg.Pool, slug: string, email: string): Promise<Seed> {
+  const tenantId = await insertTenant(pool, slug);
+  const userId = await insertUser(pool, tenantId, email, 'employee');
+  const locationId = await insertLocation(pool, tenantId, 'HQ');
+  await assignLocation(pool, userId, locationId);
+  const scheduleId = await insertNightSchedule(pool, tenantId);
+  await assignSchedule(pool, userId, scheduleId);
+  return { tenantId, userId, locationId, scheduleId };
+}
+
 interface Seed {
   tenantId: string;
   userId: string;
@@ -462,4 +490,129 @@ test('events: an accepted attendance insert writes an audit_events row', async (
     audits.rows.some((row) => row.entity_type === 'attendance_event' && row.entity_id === must(result.event, 'event').id),
     `expected an audit_events row for the attendance_event insert, got: ${JSON.stringify(audits.rows)}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// I-1: concurrent same-key submission hits the unique constraint and replays
+// ---------------------------------------------------------------------------
+test('events: a concurrent same-key insert returns the original event (created:false) instead of a raw 23505', async (t) => {
+  const fixture = await setupDb(t);
+  const seed = await seedMandatoryWorker(fixture.pool, 'race', 'race@acme.test');
+
+  // Simulate the race: a "winner" transaction has inserted the event row for
+  // the idempotency key but not yet committed, so the concurrent submission's
+  // idempotency lookup finds nothing. Its INSERT then blocks on the winner's
+  // uncommitted unique-key row and fails with 23505 once the winner commits;
+  // the SAVEPOINT recovery must catch it and re-run the idempotency lookup.
+  const winner = await fixture.pool.connect();
+  let winnerReleased = false;
+  t.after(() => {
+    if (!winnerReleased) winner.release();
+  });
+
+  await winner.query('BEGIN');
+  const wiInsert = await winner.query<{ id: string }>(
+    `INSERT INTO work_instances (tenant_id, user_id, work_date, schedule_id, scheduled_start_at, scheduled_end_at, status)
+     VALUES ($1, $2, $3::date, $4, $5, $6, 'scheduled') RETURNING id`,
+    [seed.tenantId, seed.userId, WORK_DATE, seed.scheduleId, SCHEDULE_START_UTC, new Date('2026-08-06T10:00:00.000Z')],
+  );
+  const winnerWiId = wiInsert.rows[0].id;
+  await winner.query(
+    `INSERT INTO attendance_events (
+       tenant_id, user_id, work_instance_id, event_type, idempotency_key,
+       device_occurred_at, source, geofence_result, status
+     ) VALUES ($1, $2, $3, 'check_in', $4, $5, 'web_online', 'inside', 'accepted')`,
+    [seed.tenantId, seed.userId, winnerWiId, 'idem-1', baseArgs(seed).deviceOccurredAt],
+  );
+
+  // The loser's insert parks on the winner's uncommitted key; commit the
+  // winner 100 ms in so the loser wakes up with 23505 while the call is live.
+  const loserPromise = recordAttendanceEvent(fixture.pool, baseArgs(seed));
+  const winnerDone = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await winner.query('COMMIT');
+  })();
+
+  const result = await loserPromise;
+  await winnerDone;
+  winner.release();
+  winnerReleased = true;
+
+  assert.equal(result.created, false);
+  assert.equal(result.outcome, 'accepted');
+  const event = must(result.event, 'event');
+  assert.equal(event.idempotency_key, 'idem-1');
+  assert.equal(must(result.workInstance, 'workInstance').id, winnerWiId);
+
+  // Still exactly ONE event row for the key: the loser inserted nothing.
+  const events = await fixture.pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM attendance_events
+      WHERE tenant_id = $1 AND user_id = $2 AND idempotency_key = 'idem-1'`,
+    [seed.tenantId, seed.userId],
+  );
+  assert.equal(Number(events.rows[0].count), 1);
+});
+
+// ---------------------------------------------------------------------------
+// M-1: cross-midnight night shift — check-in before midnight, check-out after
+// ---------------------------------------------------------------------------
+test('events: cross-midnight night shift yields ONE work instance on the PRIOR work date with both events linked', async (t) => {
+  const fixture = await setupDb(t);
+  const seed = await seedNightWorker(fixture.pool, 'night', 'night@acme.test');
+
+  // 2026-08-06 is a Thursday; the 22:00-06:00 shift starts Thursday and ends
+  // Friday morning. Check-in 21:55 local on 2026-08-06 = 14:55 UTC.
+  const checkIn = await recordAttendanceEvent(
+    fixture.pool,
+    baseArgs(seed, { idempotencyKey: 'night-in', deviceOccurredAt: new Date('2026-08-06T14:55:00.000Z') }),
+  );
+  assert.equal(checkIn.created, true);
+  const inWi = must(checkIn.workInstance, 'workInstance');
+  assert.equal(inWi.work_date, '2026-08-06');
+  assert.equal(inWi.late_minutes, 0); // 21:55 is before the 22:10 grace end
+
+  // Check-out 06:10 local the NEXT day (Fri 2026-08-07 06:10 +07:00 = 2026-08-06 23:10 UTC).
+  // 06:10 < 07:00 shift end, so it attributes to the PRIOR work date (Thu 2026-08-06).
+  const checkOut = await recordAttendanceEvent(
+    fixture.pool,
+    baseArgs(seed, {
+      eventType: 'check_out',
+      idempotencyKey: 'night-out',
+      deviceOccurredAt: new Date('2026-08-06T23:10:00.000Z'),
+    }),
+  );
+  assert.equal(checkOut.created, true);
+  const outEvent = must(checkOut.event, 'event');
+  const outWi = must(checkOut.workInstance, 'workInstance');
+
+  // A SINGLE work instance, attributed to the PRIOR work date (shift start).
+  assert.equal(outWi.id, inWi.id);
+  assert.equal(outWi.work_date, '2026-08-06');
+  assert.equal(outWi.check_in_event_id, must(checkIn.event, 'event').id);
+  assert.equal(outWi.check_out_event_id, outEvent.id);
+  assert.equal(outWi.status, 'completed');
+
+  // 14:55 -> 23:10 UTC = 495 min elapsed; minus 60 break = 435.
+  assert.equal(outWi.worked_minutes, 435);
+
+  // Persisted: exactly one work instance for the user, on the prior date.
+  const wis = await fixture.pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM work_instances WHERE tenant_id = $1 AND user_id = $2`,
+    [seed.tenantId, seed.userId],
+  );
+  assert.equal(Number(wis.rows[0].count), 1);
+  const persisted = await fixture.pool.query<{
+    work_date: string;
+    check_in_event_id: string;
+    check_out_event_id: string;
+    worked_minutes: number;
+  }>(
+    `SELECT work_date::text AS work_date, check_in_event_id, check_out_event_id, worked_minutes
+       FROM work_instances WHERE id = $1`,
+    [outWi.id],
+  );
+  assert.equal(persisted.rows[0].work_date, '2026-08-06');
+  assert.equal(persisted.rows[0].check_in_event_id, must(checkIn.event, 'event').id);
+  assert.equal(persisted.rows[0].check_out_event_id, outEvent.id);
+  assert.equal(persisted.rows[0].worked_minutes, 435);
 });

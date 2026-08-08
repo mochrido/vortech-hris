@@ -1,13 +1,5 @@
-import type pg from 'pg';
 import { isInsideGeofence, haversineMeters, type GeoLocation } from './geo.ts';
-
-/** Minimal queryable surface shared by pg.Pool, pg.Client and pg.PoolClient. */
-interface Queryable {
-  query<R extends pg.QueryResultRow = pg.QueryResultRow>(
-    text: string,
-    params?: unknown[],
-  ): Promise<pg.QueryResult<R>>;
-}
+import type { Queryable } from '../db/queryable.ts';
 
 /**
  * The resolved geofence policy for a worker (PRD 5.2 / 7.3 / 7.5, decisions.md #1–#2).
@@ -36,21 +28,30 @@ interface PolicyAssignmentRow {
  * Resolves the effective geofence policy for `user` in `tenant`.
  *
  * Resolution order:
- * 1. The active `user_policy_assignments` row (effective range contains
- *    today) joined to its `attendance_policies` row wins when present.
+ * 1. The active `user_policy_assignments` row (effective range contains the
+ *    effective date) joined to its `attendance_policies` row wins when present.
  * 2. Otherwise the employment-type default applies:
  *    - `field_worker` → `optional`
  *    - anything else (including `employee`) → `mandatory`
  * 3. `maxAccuracyM` falls back to the tenant value when the policy leaves it
  *    NULL; `retryCount` and `selfieRequired` come from the policy when
  *    assigned, else the schema defaults (3 / true).
+ *
+ * `effectiveDate` (`YYYY-MM-DD`) is the date the policy must be effective ON.
+ * Callers recording an attendance event pass the resolved work date so a
+ * backdated or cross-midnight event uses the policy in force on the work
+ * date, not on the server's current date. It defaults to CURRENT_DATE for
+ * back-compat. Date comparisons are done in text form (`::text` on the
+ * columns) so the `YYYY-MM-DD` parameter never round-trips through pg's
+ * DATE parser (which interprets bare dates as local midnight).
  */
 export async function getEffectivePolicy(
   client: Queryable,
   user: { id: string; tenant_id: string; employment_type: string },
   tenant: { id: string; max_accuracy_m: number },
+  effectiveDate?: string,
 ): Promise<EffectivePolicy> {
-  // Look for an active policy assignment (effective range contains today).
+  // Look for an active policy assignment (effective range contains the date).
   const result = await client.query<PolicyAssignmentRow>(
     `SELECT p.geofence_mode,
             p.selfie_required,
@@ -61,11 +62,11 @@ export async function getEffectivePolicy(
          ON p.id = upa.policy_id
         AND p.tenant_id = $2
       WHERE upa.user_id = $1
-        AND upa.effective_from <= CURRENT_DATE
-        AND (upa.effective_to IS NULL OR upa.effective_to >= CURRENT_DATE)
+        AND upa.effective_from::text <= COALESCE($3::date, CURRENT_DATE)::text
+        AND (upa.effective_to IS NULL OR upa.effective_to::text >= COALESCE($3::date, CURRENT_DATE)::text)
       ORDER BY upa.effective_from DESC, upa.created_at DESC
       LIMIT 1`,
-    [user.id, tenant.id],
+    [user.id, tenant.id, effectiveDate ?? null],
   );
 
   if (result.rows.length > 0) {
