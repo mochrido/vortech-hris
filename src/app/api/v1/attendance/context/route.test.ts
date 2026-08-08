@@ -92,7 +92,8 @@ test('GET /attendance/context: returns schedule/policy/locations/serverNow for t
        VALUES ($1, 'HQ', '-6.200000', '106.816666', 150, true) RETURNING id`,
       [tenantId],
     );
-    await fixture.pool.query(`INSERT INTO user_locations (user_id, location_id) VALUES ($1, $2)`, [
+    await fixture.pool.query(`INSERT INTO user_locations (tenant_id, user_id, location_id) VALUES ($1, $2, $3)`, [
+      tenantId,
       userId,
       loc.rows[0].id,
     ]);

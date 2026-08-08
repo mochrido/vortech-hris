@@ -85,15 +85,16 @@ async function insertSchedule(
 
 async function assignSchedule(
   pool: pg.Pool,
+  tenantId: string,
   userId: string,
   scheduleId: string,
   effectiveFrom: string,
   effectiveTo: string | null,
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO user_schedule_assignments (user_id, schedule_id, effective_from, effective_to)
-     VALUES ($1, $2, $3, $4)`,
-    [userId, scheduleId, effectiveFrom, effectiveTo],
+    `INSERT INTO user_schedule_assignments (tenant_id, user_id, schedule_id, effective_from, effective_to)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [tenantId, userId, scheduleId, effectiveFrom, effectiveTo],
   );
 }
 
@@ -128,7 +129,7 @@ test('getEffectiveSchedule returns schedule with computed work_date and bounds o
     breakMinutes: 60,
     weekdays: [1, 2, 3, 4, 5], // Mon-Fri
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2026-01-01', null);
 
   // 2026-08-06 10:00 local (Asia/Jakarta = UTC+7) => 03:00 UTC
   const atUtc = new Date('2026-08-06T03:00:00.000Z');
@@ -166,7 +167,7 @@ test('getEffectiveSchedule attributes post-midnight times of a cross-midnight sh
     crossesMidnight: true,
     weekdays: [4, 5],
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2026-01-01', null);
 
   // 2026-08-07 02:00 local => 2026-08-06 19:00 UTC
   const atUtc = new Date('2026-08-06T19:00:00.000Z');
@@ -197,7 +198,7 @@ test('getEffectiveSchedule cross-midnight evening event resolves to same-day wor
     crossesMidnight: true,
     weekdays: [4, 5],
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2026-01-01', null);
 
   // 2026-08-06 23:00 local => 16:00 UTC
   const atUtc = new Date('2026-08-06T16:00:00.000Z');
@@ -225,7 +226,7 @@ test('getEffectiveSchedule returns isHoliday true for a national holiday (tenant
     endLocal: '17:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2026-01-01', null);
   await insertHoliday(fixture.pool, null, '2026-08-17', 'Hari Kemerdekaan', 'national');
 
   // 2026-08-17 10:00 local => 03:00 UTC
@@ -249,7 +250,7 @@ test('getEffectiveSchedule returns isHoliday true for a tenant-specific holiday'
     endLocal: '17:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2026-01-01', null);
   await insertHoliday(fixture.pool, tenantId, '2026-09-01', 'Company Anniversary', 'company');
 
   // 2026-09-01 is a Tuesday (weekday 2). 10:00 local => 03:00 UTC.
@@ -273,7 +274,7 @@ test('getEffectiveSchedule ignores a holiday belonging to a different tenant', a
     endLocal: '17:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userA, scheduleId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantA, userA,scheduleId, '2026-01-01', null);
   // Holiday only for tenant B
   await insertHoliday(fixture.pool, tenantB, '2026-08-17', 'B Only Day', 'company');
 
@@ -298,7 +299,7 @@ test('getEffectiveSchedule returns null on a non-working weekday', async (t) => 
     endLocal: '17:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2026-01-01', null);
 
   // Saturday 2026-08-08 10:00 local => 03:00 UTC
   const atUtc = new Date('2026-08-08T03:00:00.000Z');
@@ -339,7 +340,7 @@ test('getEffectiveSchedule returns null when the assignment is expired', async (
     endLocal: '17:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2026-01-01', '2026-06-30');
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2026-01-01', '2026-06-30');
 
   const atUtc = new Date('2026-08-06T03:00:00.000Z');
   const result = await getEffectiveSchedule(fixture.pool, userId, tenantId, atUtc);
@@ -358,7 +359,7 @@ test('getEffectiveSchedule returns null when the assignment has not started yet'
     endLocal: '17:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userId, scheduleId, '2027-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId, '2027-01-01', null);
 
   const atUtc = new Date('2026-08-06T03:00:00.000Z');
   const result = await getEffectiveSchedule(fixture.pool, userId, tenantId, atUtc);
@@ -382,7 +383,7 @@ test('getEffectiveSchedule picks the single latest effective_from among overlapp
     endLocal: '17:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userId, morningId, '2026-01-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,morningId, '2026-01-01', null);
 
   // Newer assignment: afternoon shift, effective from 2026-07-01 (overlaps).
   const afternoonId = await insertSchedule(fixture.pool, tenantId, {
@@ -391,7 +392,7 @@ test('getEffectiveSchedule picks the single latest effective_from among overlapp
     endLocal: '21:00',
     weekdays: [1, 2, 3, 4, 5],
   });
-  await assignSchedule(fixture.pool, userId, afternoonId, '2026-07-01', null);
+  await assignSchedule(fixture.pool, tenantId, userId,afternoonId, '2026-07-01', null);
 
   const atUtc = new Date('2026-08-06T03:00:00.000Z'); // Thursday
   const result = await getEffectiveSchedule(fixture.pool, userId, tenantId, atUtc);

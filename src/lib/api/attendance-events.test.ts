@@ -125,10 +125,10 @@ async function insertSchedule(pool: pg.Pool, tenantId: string): Promise<string> 
   return scheduleId;
 }
 
-async function assignSchedule(pool: pg.Pool, userId: string, scheduleId: string): Promise<void> {
+async function assignSchedule(pool: pg.Pool, tenantId: string, userId: string, scheduleId: string): Promise<void> {
   await pool.query(
-    `INSERT INTO user_schedule_assignments (user_id, schedule_id, effective_from, effective_to) VALUES ($1, $2, '2020-01-01', NULL)`,
-    [userId, scheduleId],
+    `INSERT INTO user_schedule_assignments (tenant_id, user_id, schedule_id, effective_from, effective_to) VALUES ($1, $2, $3, '2020-01-01', NULL)`,
+    [tenantId, userId, scheduleId],
   );
 }
 
@@ -140,8 +140,12 @@ async function insertLocation(pool: pg.Pool, tenantId: string, opts: { lat: stri
   return r.rows[0].id;
 }
 
-async function assignLocation(pool: pg.Pool, userId: string, locationId: string): Promise<void> {
-  await pool.query(`INSERT INTO user_locations (user_id, location_id) VALUES ($1, $2)`, [userId, locationId]);
+async function assignLocation(pool: pg.Pool, tenantId: string, userId: string, locationId: string): Promise<void> {
+  await pool.query(`INSERT INTO user_locations (tenant_id, user_id, location_id) VALUES ($1, $2, $3)`, [
+    tenantId,
+    userId,
+    locationId,
+  ]);
 }
 
 async function makeSession(userId: string): Promise<string> {
@@ -179,9 +183,9 @@ async function seedMember(fx: Fixture, opts: { employmentType?: string } = {}): 
   const userId = await insertUser(fx.pool, tenantId, { employmentType: opts.employmentType });
   await insertRole(fx.pool, userId, 'employee');
   const scheduleId = await insertSchedule(fx.pool, tenantId);
-  await assignSchedule(fx.pool, userId, scheduleId);
+  await assignSchedule(fx.pool, tenantId, userId, scheduleId);
   const locationId = await insertLocation(fx.pool, tenantId, { lat: '-6.200000', lon: '106.816666', radiusM: 200 });
-  await assignLocation(fx.pool, userId, locationId);
+  await assignLocation(fx.pool, tenantId, userId, locationId);
   const token = await makeSession(userId);
   return { tenantId, userId, token, locationId };
 }
@@ -504,7 +508,7 @@ test('GET /manager/team/today: returns only the manager assigned-team members to
     await insertRole(fx.pool, manager, 'manager');
     const member = await insertUser(fx.pool, tenantId, { name: 'Member' });
     await insertRole(fx.pool, member, 'employee');
-    await assignSchedule(fx.pool, member, scheduleId);
+    await assignSchedule(fx.pool, tenantId, member, scheduleId);
 
     // A team assigned to the manager containing the member.
     const team = await fx.pool.query<{ id: string }>(`INSERT INTO teams (tenant_id, name) VALUES ($1, 'Alpha') RETURNING id`, [tenantId]);
@@ -538,7 +542,7 @@ test('GET /manager/team/today: a member in two of the manager\'s teams appears e
     await insertRole(fx.pool, manager, 'manager');
     const member = await insertUser(fx.pool, tenantId, { name: 'Member' });
     await insertRole(fx.pool, member, 'employee');
-    await assignSchedule(fx.pool, member, scheduleId);
+    await assignSchedule(fx.pool, tenantId, member, scheduleId);
 
     // Two teams, BOTH assigned to the same manager, BOTH containing the member.
     const teamA = await fx.pool.query<{ id: string }>(`INSERT INTO teams (tenant_id, name) VALUES ($1, 'Alpha') RETURNING id`, [tenantId]);

@@ -68,8 +68,12 @@ async function insertLocation(
   return result.rows[0].id;
 }
 
-async function assignLocation(pool: pg.Pool, userId: string, locationId: string): Promise<void> {
-  await pool.query(`INSERT INTO user_locations (user_id, location_id) VALUES ($1, $2)`, [userId, locationId]);
+async function assignLocation(pool: pg.Pool, tenantId: string, userId: string, locationId: string): Promise<void> {
+  await pool.query(`INSERT INTO user_locations (tenant_id, user_id, location_id) VALUES ($1, $2, $3)`, [
+    tenantId,
+    userId,
+    locationId,
+  ]);
 }
 
 async function insertPolicy(
@@ -100,15 +104,16 @@ async function insertPolicy(
 
 async function assignPolicy(
   pool: pg.Pool,
+  tenantId: string,
   userId: string,
   policyId: string,
   effectiveFrom: string,
   effectiveTo: string | null,
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO user_policy_assignments (user_id, policy_id, effective_from, effective_to)
-     VALUES ($1, $2, $3, $4)`,
-    [userId, policyId, effectiveFrom, effectiveTo],
+    `INSERT INTO user_policy_assignments (tenant_id, user_id, policy_id, effective_from, effective_to)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [tenantId, userId, policyId, effectiveFrom, effectiveTo],
   );
 }
 
@@ -192,7 +197,7 @@ test('getEffectivePolicy resolves an explicit user_policy_assignments row over t
     maxAccuracyM: 25,
     retryCount: 5,
   });
-  await assignPolicy(fixture.pool, userId, policyId, PAST, null);
+  await assignPolicy(fixture.pool, tenantId, userId,policyId, PAST, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'employee' }, tenant);
@@ -212,7 +217,7 @@ test('getEffectivePolicy falls back to tenant max_accuracy_m when policy max_acc
     geofenceMode: 'mandatory',
     maxAccuracyM: null,
   });
-  await assignPolicy(fixture.pool, userId, policyId, PAST, null);
+  await assignPolicy(fixture.pool, tenantId, userId,policyId, PAST, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'field_worker' }, tenant);
@@ -228,8 +233,8 @@ test('getEffectivePolicy ignores expired and future-dated assignments', async (t
   const userId = await insertUser(fixture.pool, tenantId, 'frank@dates.test', 'employee');
   const expiredId = await insertPolicy(fixture.pool, tenantId, { name: 'Expired', geofenceMode: 'optional' });
   const futureId = await insertPolicy(fixture.pool, tenantId, { name: 'Future', geofenceMode: 'optional' });
-  await assignPolicy(fixture.pool, userId, expiredId, PAST_EARLIER, PAST_END);
-  await assignPolicy(fixture.pool, userId, futureId, FUTURE, null);
+  await assignPolicy(fixture.pool, tenantId, userId,expiredId, PAST_EARLIER, PAST_END);
+  await assignPolicy(fixture.pool, tenantId, userId,futureId, FUTURE, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'employee' }, tenant);
@@ -257,8 +262,8 @@ test('getEffectivePolicy resolves overlapping active assignments to the latest e
     geofenceMode: 'mandatory',
     maxAccuracyM: 40,
   });
-  await assignPolicy(fixture.pool, userId, olderId, PAST_EARLIER, null);
-  await assignPolicy(fixture.pool, userId, newerId, PAST, null);
+  await assignPolicy(fixture.pool, tenantId, userId,olderId, PAST_EARLIER, null);
+  await assignPolicy(fixture.pool, tenantId, userId,newerId, PAST, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'employee' }, tenant);
@@ -281,7 +286,7 @@ test('getEffectivePolicy honors the passed effective date over CURRENT_DATE (I-2
     maxAccuracyM: 20,
   });
   // Future-dated relative to CURRENT_DATE, so it never applies "today"...
-  await assignPolicy(fixture.pool, userId, futurePolicyId, FUTURE, null);
+  await assignPolicy(fixture.pool, tenantId, userId,futurePolicyId, FUTURE, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
   const user = { id: userId, tenant_id: tenantId, employment_type: 'employee' };
 

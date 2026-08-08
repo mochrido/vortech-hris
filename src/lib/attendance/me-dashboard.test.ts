@@ -63,11 +63,11 @@ async function insertSchedule(pool: pg.Pool, tenantId: string, opts: { weekdays?
   return scheduleId;
 }
 
-async function assignSchedule(pool: pg.Pool, userId: string, scheduleId: string): Promise<void> {
+async function assignSchedule(pool: pg.Pool, tenantId: string, userId: string, scheduleId: string): Promise<void> {
   await pool.query(
-    `INSERT INTO user_schedule_assignments (user_id, schedule_id, effective_from, effective_to)
-     VALUES ($1, $2, '2026-01-01', NULL)`,
-    [userId, scheduleId],
+    `INSERT INTO user_schedule_assignments (tenant_id, user_id, schedule_id, effective_from, effective_to)
+     VALUES ($1, $2, $3, '2026-01-01', NULL)`,
+    [tenantId, userId, scheduleId],
   );
 }
 
@@ -145,7 +145,7 @@ test('dashboard: today shows the work instance with check-in/out times; recent l
   const tenantId = await insertTenant(fixture.pool);
   const userId = await insertUser(fixture.pool, tenantId);
   const scheduleId = await insertSchedule(fixture.pool, tenantId);
-  await assignSchedule(fixture.pool, userId, scheduleId);
+  await assignSchedule(fixture.pool, tenantId, userId,scheduleId);
 
   // Today's instance: checked in at 09:05 local (02:05 UTC), not yet out.
   const todayWi = await insertWorkInstance(fixture.pool, {
@@ -226,7 +226,7 @@ test('dashboard: today reflects the effective schedule even before any work inst
   const fixture = await setupDb(t);
   const tenantId = await insertTenant(fixture.pool);
   const userId = await insertUser(fixture.pool, tenantId);
-  await assignSchedule(fixture.pool, userId, await insertSchedule(fixture.pool, tenantId));
+  await assignSchedule(fixture.pool, tenantId, userId,await insertSchedule(fixture.pool, tenantId));
 
   const dash = await getMyDashboard(fixture.pool, tenantId, userId, NOW);
 
@@ -243,7 +243,7 @@ test('dashboard: today is null on a non-working weekday when no work instance ex
   const fixture = await setupDb(t);
   const tenantId = await insertTenant(fixture.pool);
   const userId = await insertUser(fixture.pool, tenantId);
-  await assignSchedule(fixture.pool, userId, await insertSchedule(fixture.pool, tenantId)); // Mon-Fri only
+  await assignSchedule(fixture.pool, tenantId, userId,await insertSchedule(fixture.pool, tenantId)); // Mon-Fri only
 
   // 2026-08-08 is a Saturday: 10:00 local = 03:00 UTC.
   const saturday = new Date('2026-08-08T03:00:00.000Z');
@@ -255,7 +255,7 @@ test('dashboard: today flags isHoliday from the effective schedule', async (t) =
   const fixture = await setupDb(t);
   const tenantId = await insertTenant(fixture.pool);
   const userId = await insertUser(fixture.pool, tenantId);
-  await assignSchedule(fixture.pool, userId, await insertSchedule(fixture.pool, tenantId));
+  await assignSchedule(fixture.pool, tenantId, userId,await insertSchedule(fixture.pool, tenantId));
   await fixture.pool.query(
     `INSERT INTO holidays (tenant_id, holiday_date, name, kind) VALUES ($1, '2026-08-06', 'Company Day', 'company')`,
     [tenantId],

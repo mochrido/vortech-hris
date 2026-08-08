@@ -72,8 +72,12 @@ async function insertLocation(pool: pg.Pool, tenantId: string, name: string): Pr
   return result.rows[0].id;
 }
 
-async function assignLocation(pool: pg.Pool, userId: string, locationId: string): Promise<void> {
-  await pool.query(`INSERT INTO user_locations (user_id, location_id) VALUES ($1, $2)`, [userId, locationId]);
+async function assignLocation(pool: pg.Pool, tenantId: string, userId: string, locationId: string): Promise<void> {
+  await pool.query(`INSERT INTO user_locations (tenant_id, user_id, location_id) VALUES ($1, $2, $3)`, [
+    tenantId,
+    userId,
+    locationId,
+  ]);
 }
 
 /** Fixed Mon-Fri 09:00-17:00 schedule. */
@@ -90,11 +94,11 @@ async function insertSchedule(pool: pg.Pool, tenantId: string): Promise<string> 
   return scheduleId;
 }
 
-async function assignSchedule(pool: pg.Pool, userId: string, scheduleId: string): Promise<void> {
+async function assignSchedule(pool: pg.Pool, tenantId: string, userId: string, scheduleId: string): Promise<void> {
   await pool.query(
-    `INSERT INTO user_schedule_assignments (user_id, schedule_id, effective_from, effective_to)
-     VALUES ($1, $2, $3, NULL)`,
-    [userId, scheduleId, '2026-01-01'],
+    `INSERT INTO user_schedule_assignments (tenant_id, user_id, schedule_id, effective_from, effective_to)
+     VALUES ($1, $2, $3, $4, NULL)`,
+    [tenantId, userId, scheduleId, '2026-01-01'],
   );
 }
 
@@ -120,9 +124,9 @@ async function seedNightWorker(pool: pg.Pool, slug: string, email: string): Prom
   const tenantId = await insertTenant(pool, slug);
   const userId = await insertUser(pool, tenantId, email, 'employee');
   const locationId = await insertLocation(pool, tenantId, 'HQ');
-  await assignLocation(pool, userId, locationId);
+  await assignLocation(pool, tenantId, userId, locationId);
   const scheduleId = await insertNightSchedule(pool, tenantId);
-  await assignSchedule(pool, userId, scheduleId);
+  await assignSchedule(pool, tenantId, userId, scheduleId);
   return { tenantId, userId, locationId, scheduleId };
 }
 
@@ -138,9 +142,9 @@ async function seedMandatoryWorker(pool: pg.Pool, slug: string, email: string): 
   const tenantId = await insertTenant(pool, slug);
   const userId = await insertUser(pool, tenantId, email, 'employee');
   const locationId = await insertLocation(pool, tenantId, 'HQ');
-  await assignLocation(pool, userId, locationId);
+  await assignLocation(pool, tenantId, userId, locationId);
   const scheduleId = await insertSchedule(pool, tenantId);
-  await assignSchedule(pool, userId, scheduleId);
+  await assignSchedule(pool, tenantId, userId, scheduleId);
   return { tenantId, userId, locationId, scheduleId };
 }
 
@@ -149,9 +153,9 @@ async function seedFieldWorker(pool: pg.Pool, slug: string, email: string): Prom
   const tenantId = await insertTenant(pool, slug);
   const userId = await insertUser(pool, tenantId, email, 'field_worker');
   const locationId = await insertLocation(pool, tenantId, 'HQ');
-  await assignLocation(pool, userId, locationId);
+  await assignLocation(pool, tenantId, userId, locationId);
   const scheduleId = await insertSchedule(pool, tenantId);
-  await assignSchedule(pool, userId, scheduleId);
+  await assignSchedule(pool, tenantId, userId, scheduleId);
   return { tenantId, userId, locationId, scheduleId };
 }
 

@@ -97,8 +97,8 @@ test('GET /me/dashboard: returns today + recent for the session user', async (t)
       await fixture.pool.query(`INSERT INTO schedule_days (schedule_id, weekday) VALUES ($1, $2)`, [scheduleId, weekday]);
     }
     await fixture.pool.query(
-      `INSERT INTO user_schedule_assignments (user_id, schedule_id, effective_from) VALUES ($1, $2, '2020-01-01')`,
-      [userId, scheduleId],
+      `INSERT INTO user_schedule_assignments (tenant_id, user_id, schedule_id, effective_from) VALUES ($1, $2, $3, '2020-01-01')`,
+      [tenantId, userId, scheduleId],
     );
 
     const { token } = await login(slug, email, PASSWORD, {});

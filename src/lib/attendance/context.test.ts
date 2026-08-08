@@ -73,11 +73,11 @@ async function insertSchedule(pool: pg.Pool, tenantId: string): Promise<string> 
   return scheduleId;
 }
 
-async function assignSchedule(pool: pg.Pool, userId: string, scheduleId: string): Promise<void> {
+async function assignSchedule(pool: pg.Pool, tenantId: string, userId: string, scheduleId: string): Promise<void> {
   await pool.query(
-    `INSERT INTO user_schedule_assignments (user_id, schedule_id, effective_from, effective_to)
-     VALUES ($1, $2, '2026-01-01', NULL)`,
-    [userId, scheduleId],
+    `INSERT INTO user_schedule_assignments (tenant_id, user_id, schedule_id, effective_from, effective_to)
+     VALUES ($1, $2, $3, '2026-01-01', NULL)`,
+    [tenantId, userId, scheduleId],
   );
 }
 
@@ -94,8 +94,12 @@ async function insertLocation(
   return result.rows[0].id;
 }
 
-async function assignLocation(pool: pg.Pool, userId: string, locationId: string): Promise<void> {
-  await pool.query(`INSERT INTO user_locations (user_id, location_id) VALUES ($1, $2)`, [userId, locationId]);
+async function assignLocation(pool: pg.Pool, tenantId: string, userId: string, locationId: string): Promise<void> {
+  await pool.query(`INSERT INTO user_locations (tenant_id, user_id, location_id) VALUES ($1, $2, $3)`, [
+    tenantId,
+    userId,
+    locationId,
+  ]);
 }
 
 // 2026-08-06 is a Thursday. 10:00 local (UTC+7) = 03:00 UTC.
@@ -106,11 +110,11 @@ test('context: returns schedule, policy, assigned active locations, and server t
   const tenantId = await insertTenant(fixture.pool, { maxAccuracyM: 50 });
   const userId = await insertUser(fixture.pool, tenantId);
   const scheduleId = await insertSchedule(fixture.pool, tenantId);
-  await assignSchedule(fixture.pool, userId, scheduleId);
+  await assignSchedule(fixture.pool, tenantId, userId, scheduleId);
   const locA = await insertLocation(fixture.pool, tenantId, { name: 'HQ', lat: '-6.200000', lon: '106.816666', radiusM: 150 });
   const locB = await insertLocation(fixture.pool, tenantId, { name: 'Branch', lat: '-6.300000', lon: '106.800000', radiusM: 75 });
-  await assignLocation(fixture.pool, userId, locA);
-  await assignLocation(fixture.pool, userId, locB);
+  await assignLocation(fixture.pool, tenantId, userId, locA);
+  await assignLocation(fixture.pool, tenantId, userId, locB);
 
   const before = Date.now();
   const ctx = await getAttendanceContext(fixture.pool, tenantId, userId, NOW);
@@ -163,7 +167,7 @@ test('context: schedule resolves null on a non-working weekday (Saturday)', asyn
   const tenantId = await insertTenant(fixture.pool);
   const userId = await insertUser(fixture.pool, tenantId);
   const scheduleId = await insertSchedule(fixture.pool, tenantId);
-  await assignSchedule(fixture.pool, userId, scheduleId);
+  await assignSchedule(fixture.pool, tenantId, userId, scheduleId);
 
   // 2026-08-08 is a Saturday: 10:00 local = 03:00 UTC.
   const saturday = new Date('2026-08-08T03:00:00.000Z');
@@ -176,7 +180,7 @@ test('context: schedule resolves with isHoliday true on a tenant holiday', async
   const tenantId = await insertTenant(fixture.pool);
   const userId = await insertUser(fixture.pool, tenantId);
   const scheduleId = await insertSchedule(fixture.pool, tenantId);
-  await assignSchedule(fixture.pool, userId, scheduleId);
+  await assignSchedule(fixture.pool, tenantId, userId, scheduleId);
   await fixture.pool.query(
     `INSERT INTO holidays (tenant_id, holiday_date, name, kind) VALUES ($1, '2026-08-06', 'Company Day', 'company')`,
     [tenantId],
@@ -206,9 +210,9 @@ test('context: an active policy assignment overrides the employment-type default
     [tenantId],
   );
   await fixture.pool.query(
-    `INSERT INTO user_policy_assignments (user_id, policy_id, effective_from, effective_to)
-     VALUES ($1, $2, '2026-01-01', NULL)`,
-    [userId, policy.rows[0].id],
+    `INSERT INTO user_policy_assignments (tenant_id, user_id, policy_id, effective_from, effective_to)
+     VALUES ($1, $2, $3, '2026-01-01', NULL)`,
+    [tenantId, userId, policy.rows[0].id],
   );
 
   const ctx = await getAttendanceContext(fixture.pool, tenantId, userId, NOW);
@@ -225,11 +229,11 @@ test('context: inactive and unassigned locations are excluded', async (t) => {
   const activeLoc = await insertLocation(fixture.pool, tenantId, { name: 'Active', lat: '-6.2', lon: '106.8', radiusM: 100 });
   const inactiveLoc = await insertLocation(fixture.pool, tenantId, { name: 'Inactive', lat: '-6.3', lon: '106.9', radiusM: 100, active: false });
   const otherUserLoc = await insertLocation(fixture.pool, tenantId, { name: 'Other', lat: '-6.4', lon: '107.0', radiusM: 100 });
-  await assignLocation(fixture.pool, userId, activeLoc);
-  await assignLocation(fixture.pool, userId, inactiveLoc);
+  await assignLocation(fixture.pool, tenantId, userId, activeLoc);
+  await assignLocation(fixture.pool, tenantId, userId, inactiveLoc);
   // Assigned to a DIFFERENT user — must not leak into this user's context.
   const otherUser = await insertUser(fixture.pool, tenantId);
-  await assignLocation(fixture.pool, otherUser, otherUserLoc);
+  await assignLocation(fixture.pool, tenantId, otherUser, otherUserLoc);
 
   const ctx = await getAttendanceContext(fixture.pool, tenantId, userId, NOW);
   assert.deepEqual(ctx.locations.map((l) => l.name), ['Active']);
@@ -242,8 +246,12 @@ test('context: locations never leak across tenants', async (t) => {
   const userA = await insertUser(fixture.pool, tenantA);
   const locB = await insertLocation(fixture.pool, tenantB, { name: 'B-Loc', lat: '-6.2', lon: '106.8', radiusM: 100 });
   // Pathological: user A (tenant A) is assigned to tenant B's location. The
-  // tenant join filter must still exclude it from A's context.
-  await assignLocation(fixture.pool, userA, locB);
+  // composite tenant FK (0007) makes the inconsistency impossible at the
+  // database level.
+  await assert.rejects(assignLocation(fixture.pool, tenantA, userA, locB), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, '23503');
+    return true;
+  });
 
   const ctx = await getAttendanceContext(fixture.pool, tenantA, userA, NOW);
   assert.equal(ctx.locations.length, 0, 'a location from another tenant must never be returned');

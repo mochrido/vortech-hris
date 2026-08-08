@@ -37,6 +37,13 @@ ENV HOSTNAME=0.0.0.0
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 
+# The `jobs` compose service runs maintenance scripts (auto-checkout,
+# migrations) straight off the repo with the same traced node_modules as the
+# server bundle; ship the script, migration, and shared-lib trees.
+COPY --from=build --chown=node:node /app/scripts ./scripts
+COPY --from=build --chown=node:node /app/migrations ./migrations
+COPY --from=build --chown=node:node /app/src/lib ./src/lib
+
 # Guarantee the destination exists even if the source repo has an empty or
 # absent public/ (a bare `COPY /app/public ./public` fails the BuildKit build
 # when the source directory is missing). public/.gitkeep keeps the dir tracked.
