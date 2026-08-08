@@ -56,6 +56,6 @@ test('isInsideGeofence returns false for an empty locations array', () => {
 });
 
 test('isInsideGeofence ignores locations whose radius_m is null', () => {
-  const locations = [{ latitude: -6.2, longitude: 106.816, radius_m: null as unknown as number }];
+  const locations = [{ latitude: -6.2, longitude: 106.816, radius_m: null }];
   assert.equal(isInsideGeofence(-6.2, 106.816, locations), false);
 });

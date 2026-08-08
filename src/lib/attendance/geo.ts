@@ -22,7 +22,7 @@ export function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: 
 export interface GeoLocation {
   latitude: number;
   longitude: number;
-  radius_m: number;
+  radius_m: number | null;
 }
 
 /** True when the point is within the radius of at least one location (on-radius counts as inside). */
