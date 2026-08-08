@@ -113,6 +113,31 @@ async function assignPolicy(
 }
 
 // ---------------------------------------------------------------------------
+// Relative dates (getEffectivePolicy compares against CURRENT_DATE)
+// ---------------------------------------------------------------------------
+
+/** Formats a Date as YYYY-MM-DD (UTC) to match the DB date comparisons. */
+function formatDate(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Returns YYYY-MM-DD `days` from today (UTC); negative = past, positive = future. */
+function addDays(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + days);
+  return formatDate(d);
+}
+
+// Shared relative anchors so the active/expired/future scenarios never go stale.
+const PAST = addDays(-30);
+const PAST_EARLIER = addDays(-60);
+const PAST_END = addDays(-1);
+const FUTURE = addDays(30);
+
+// ---------------------------------------------------------------------------
 // getEffectivePolicy
 // ---------------------------------------------------------------------------
 
@@ -167,7 +192,7 @@ test('getEffectivePolicy resolves an explicit user_policy_assignments row over t
     maxAccuracyM: 25,
     retryCount: 5,
   });
-  await assignPolicy(fixture.pool, userId, policyId, '2026-01-01', null);
+  await assignPolicy(fixture.pool, userId, policyId, PAST, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'employee' }, tenant);
@@ -187,7 +212,7 @@ test('getEffectivePolicy falls back to tenant max_accuracy_m when policy max_acc
     geofenceMode: 'mandatory',
     maxAccuracyM: null,
   });
-  await assignPolicy(fixture.pool, userId, policyId, '2026-01-01', null);
+  await assignPolicy(fixture.pool, userId, policyId, PAST, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'field_worker' }, tenant);
@@ -203,8 +228,8 @@ test('getEffectivePolicy ignores expired and future-dated assignments', async (t
   const userId = await insertUser(fixture.pool, tenantId, 'frank@dates.test', 'employee');
   const expiredId = await insertPolicy(fixture.pool, tenantId, { name: 'Expired', geofenceMode: 'optional' });
   const futureId = await insertPolicy(fixture.pool, tenantId, { name: 'Future', geofenceMode: 'optional' });
-  await assignPolicy(fixture.pool, userId, expiredId, '2026-01-01', '2026-06-30');
-  await assignPolicy(fixture.pool, userId, futureId, '2027-01-01', null);
+  await assignPolicy(fixture.pool, userId, expiredId, PAST_EARLIER, PAST_END);
+  await assignPolicy(fixture.pool, userId, futureId, FUTURE, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'employee' }, tenant);
@@ -232,13 +257,13 @@ test('getEffectivePolicy resolves overlapping active assignments to the latest e
     geofenceMode: 'mandatory',
     maxAccuracyM: 40,
   });
-  await assignPolicy(fixture.pool, userId, olderId, '2026-01-01', null);
-  await assignPolicy(fixture.pool, userId, newerId, '2026-06-01', null);
+  await assignPolicy(fixture.pool, userId, olderId, PAST_EARLIER, null);
+  await assignPolicy(fixture.pool, userId, newerId, PAST, null);
   const tenant = { id: tenantId, max_accuracy_m: 50 };
 
   const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'employee' }, tenant);
 
-  // The newer assignment (effective_from 2026-06-01) wins deterministically.
+  // The newer assignment (later effective_from) wins deterministically.
   assert.equal(policy.geofenceMode, 'mandatory');
   assert.equal(policy.maxAccuracyM, 40);
 });
