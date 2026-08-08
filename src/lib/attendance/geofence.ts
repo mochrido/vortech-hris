@@ -95,29 +95,53 @@ export interface GeoLocationWithId extends GeoLocation {
 /**
  * The outcome of evaluating a GPS fix against a worker's geofence policy.
  *
- * Kinds (PRD 7.3 / 7.5, decisions.md #2):
- * - `inside`                — fix is inside an assigned location.
- * - `outside_blocked`       — fix is outside all assigned locations and the
- *                             policy is `mandatory` (submission blocked).
- * - `outside_accepted`      — fix is outside all assigned locations and the
- *                             policy is `optional` (accepted, flagged).
- * - `no_location_blocked`   — no GPS fix (permission denied) and the policy
- *                             is `mandatory` (blocked).
- * - `no_location_accepted`  — no GPS fix and the policy is `optional`
- *                             (accepted with a missing-location anomaly).
- * - `accuracy_review`       — GPS accuracy exceeds the effective maximum
- *                             after retries; accepted but flagged
- *                             `needs_review` with an accuracy anomaly.
+ * Decision #12 (PRD 7.5): poor GPS accuracy and the inside/outside geofence
+ * result are INDEPENDENT facts, not an either/or verdict. The verdict therefore
+ * carries both as separate fields instead of a single `kind`:
  *
- * Precedence:
- * 1. `accuracy_review` when `accuracyM` is present and exceeds the policy max.
- * 2. `no_location_*` when coordinates are missing.
- * 3. `inside` / `outside_*` based on the geofence math.
+ * - `inside`          — `true` when the fix is within at least one assigned
+ *                       location (on-radius counts as inside), `false` when it
+ *                       is outside all of them, `null` when there is no GPS fix
+ *                       (coordinates missing).
+ * - `blocked`         — `true` ONLY when the policy is `mandatory` AND the fix
+ *                       is outside all assigned locations (or there is no fix).
+ *                       A mandatory block applies even when accuracy was poor.
+ * - `accuracyAnomaly` — `true` when `accuracyM` is present and exceeds the
+ *                       effective `maxAccuracyM`. Recorded independently of
+ *                       inside/outside so reviewers keep the accuracy signal.
+ * - `locationId`      — the id of the containing location when the fix is
+ *                       inside one; `undefined` otherwise.
+ * - `distanceM`       — distance to the NEAREST assigned location when a fix is
+ *                       present; `undefined` (NOT 0) when there are no valid
+ *                       locations or no fix.
+ *
+ * How `events.ts` should interpret it (see also `verdictToOutcome`):
+ * - `blocked === true`                → reject the submission (`blocked`).
+ * - `!blocked && accuracyAnomaly`     → accept, flag `needs_review` (accuracy).
+ * - otherwise                         → accept.
+ * The inside/outside fact (`inside`) is always recorded for review context,
+ * especially for `optional` (field_worker) submissions.
  */
 export interface GeofenceVerdict {
-  kind: 'inside' | 'outside_blocked' | 'outside_accepted' | 'no_location_blocked' | 'no_location_accepted' | 'accuracy_review';
+  inside: boolean | null;
+  blocked: boolean;
+  accuracyAnomaly: boolean;
   locationId?: string;
   distanceM?: number;
+}
+
+/**
+ * Maps a verdict to the single accept/block/needs_review outcome `events.ts`
+ * acts on. Kept tiny and pure so the interpretation is explicit and testable.
+ *
+ * - `blocked`       → submission rejected (mandatory outside / no fix).
+ * - `needs_review`  → accepted but flagged (accuracy anomaly).
+ * - `accepted`      → accepted.
+ */
+export function verdictToOutcome(verdict: GeofenceVerdict): 'accepted' | 'blocked' | 'needs_review' {
+  if (verdict.blocked) return 'blocked';
+  if (verdict.accuracyAnomaly) return 'needs_review';
+  return 'accepted';
 }
 
 /** Finds the assigned location that contains the point, or the nearest one when outside. */
@@ -140,8 +164,10 @@ function nearestLocation(
 /**
  * Pure geofence verdict for a single GPS fix.
  *
- * Delegates the inside/outside decision to `isInsideGeofence` (on-radius
- * counts as inside) and computes distances with `haversineMeters`.
+ * Accuracy and inside/outside are computed as INDEPENDENT facts (decision #12):
+ * `isInsideGeofence` is the single source of truth for the inside test
+ * (on-radius counts as inside) and `distanceM`/`locationId` are derived from
+ * the same nearest-location pass, never from a duplicated radius re-check.
  */
 export function evaluateGeofence(args: {
   policy: EffectivePolicy;
@@ -151,32 +177,30 @@ export function evaluateGeofence(args: {
   locations: GeoLocationWithId[];
 }): GeofenceVerdict {
   const { policy, latitude, longitude, accuracyM, locations } = args;
+  const mandatory = policy.geofenceMode === 'mandatory';
 
-  // 1. Accuracy review takes precedence when we have a fix and the reported
-  //    accuracy exceeds the allowed maximum.
-  if (latitude != null && longitude != null && accuracyM != null && accuracyM > policy.maxAccuracyM) {
-    const nearest = nearestLocation(latitude, longitude, locations);
-    if (nearest && nearest.distanceM <= (nearest.location.radius_m ?? 0)) {
-      return { kind: 'accuracy_review', locationId: nearest.location.id, distanceM: nearest.distanceM };
-    }
-    return { kind: 'accuracy_review', distanceM: nearest?.distanceM };
-  }
-
-  // 2. No GPS fix (permission denied or unavailable).
+  // No GPS fix (permission denied or unavailable): there is no inside/outside
+  // fact and no accuracy to evaluate. Mandatory blocks, optional accepts.
   if (latitude == null || longitude == null) {
-    return policy.geofenceMode === 'mandatory' ? { kind: 'no_location_blocked' } : { kind: 'no_location_accepted' };
+    return { inside: null, blocked: mandatory, accuracyAnomaly: false };
   }
 
-  // 3. Inside / outside evaluation.
-  if (isInsideGeofence(latitude, longitude, locations)) {
-    const nearest = nearestLocation(latitude, longitude, locations);
-    // `nearest` is guaranteed to exist because isInsideGeofence returned true.
-    return { kind: 'inside', locationId: nearest!.location.id, distanceM: nearest!.distanceM };
-  }
-
+  const accuracyAnomaly = accuracyM != null && accuracyM > policy.maxAccuracyM;
+  const inside = isInsideGeofence(latitude, longitude, locations);
   const nearest = nearestLocation(latitude, longitude, locations);
-  if (policy.geofenceMode === 'mandatory') {
-    return { kind: 'outside_blocked' };
+
+  const verdict: GeofenceVerdict = {
+    inside,
+    blocked: mandatory && !inside,
+    accuracyAnomaly,
+  };
+  // `nearest` is null only when no location has a usable radius; leave
+  // distanceM undefined (NOT 0) in that case.
+  if (nearest) {
+    verdict.distanceM = nearest.distanceM;
+    if (inside) {
+      verdict.locationId = nearest.location.id;
+    }
   }
-  return { kind: 'outside_accepted', distanceM: nearest?.distanceM ?? 0 };
+  return verdict;
 }

@@ -6,7 +6,7 @@ import pg from 'pg';
 import { createTestDatabase, dropTestDatabase } from '../test/db.ts';
 import { runMigrations } from '../db/migrate.ts';
 import { closePool } from '../db/pool.ts';
-import { getEffectivePolicy, evaluateGeofence, type EffectivePolicy } from './geofence.ts';
+import { getEffectivePolicy, evaluateGeofence, verdictToOutcome, type EffectivePolicy } from './geofence.ts';
 import type { GeoLocation } from './geo.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -215,6 +215,34 @@ test('getEffectivePolicy ignores expired and future-dated assignments', async (t
   assert.equal(policy.retryCount, 3);
 });
 
+test('getEffectivePolicy resolves overlapping active assignments to the latest effective_from (M5)', async (t) => {
+  const fixture = await setupDb(t);
+  const tenantId = await insertTenant(fixture.pool, 'overlap');
+  const userId = await insertUser(fixture.pool, tenantId, 'olive@overlap.test', 'employee');
+  // Two simultaneously-active assignments (both effective ranges contain today).
+  // Non-overlap is app-level, so overlap is possible; resolution must be
+  // deterministic and match schedule.ts: latest effective_from wins.
+  const olderId = await insertPolicy(fixture.pool, tenantId, {
+    name: 'Older',
+    geofenceMode: 'optional',
+    maxAccuracyM: 25,
+  });
+  const newerId = await insertPolicy(fixture.pool, tenantId, {
+    name: 'Newer',
+    geofenceMode: 'mandatory',
+    maxAccuracyM: 40,
+  });
+  await assignPolicy(fixture.pool, userId, olderId, '2026-01-01', null);
+  await assignPolicy(fixture.pool, userId, newerId, '2026-06-01', null);
+  const tenant = { id: tenantId, max_accuracy_m: 50 };
+
+  const policy = await getEffectivePolicy(fixture.pool, { id: userId, tenant_id: tenantId, employment_type: 'employee' }, tenant);
+
+  // The newer assignment (effective_from 2026-06-01) wins deterministically.
+  assert.equal(policy.geofenceMode, 'mandatory');
+  assert.equal(policy.maxAccuracyM, 40);
+});
+
 // ---------------------------------------------------------------------------
 // evaluateGeofence
 // ---------------------------------------------------------------------------
@@ -229,7 +257,7 @@ interface TestLocation extends GeoLocation {
 const JAKARTA: TestLocation = { id: 'loc-jkt', latitude: -6.2, longitude: 106.816, radius_m: 150 };
 const BANDUNG: TestLocation = { id: 'loc-bdg', latitude: -6.914744, longitude: 107.60981, radius_m: 100 };
 
-test('evaluateGeofence returns inside with locationId and distanceM when within radius', () => {
+test('evaluateGeofence inside with good accuracy: not blocked, no anomaly, locationId + distanceM', () => {
   const verdict = evaluateGeofence({
     policy: MANDATORY,
     latitude: -6.2,
@@ -238,13 +266,17 @@ test('evaluateGeofence returns inside with locationId and distanceM when within 
     locations: [JAKARTA],
   });
 
-  assert.equal(verdict.kind, 'inside');
+  assert.deepEqual(
+    { inside: verdict.inside, blocked: verdict.blocked, accuracyAnomaly: verdict.accuracyAnomaly },
+    { inside: true, blocked: false, accuracyAnomaly: false },
+  );
   assert.equal(verdict.locationId, 'loc-jkt');
   assert.equal(typeof verdict.distanceM, 'number');
   assert.ok(verdict.distanceM! <= 150);
+  assert.equal(verdictToOutcome(verdict), 'accepted');
 });
 
-test('evaluateGeofence returns inside when inside ANY of multiple locations', () => {
+test('evaluateGeofence inside ANY of multiple locations picks the containing location', () => {
   const verdict = evaluateGeofence({
     policy: MANDATORY,
     latitude: -6.2,
@@ -253,67 +285,29 @@ test('evaluateGeofence returns inside when inside ANY of multiple locations', ()
     locations: [BANDUNG, JAKARTA],
   });
 
-  assert.equal(verdict.kind, 'inside');
+  assert.equal(verdict.inside, true);
+  assert.equal(verdict.blocked, false);
   assert.equal(verdict.locationId, 'loc-jkt');
 });
 
-test('evaluateGeofence returns outside_blocked for mandatory policy outside all locations', () => {
+// I1 — the key decision-#12 case: a mandatory block applies even when accuracy
+// was poor, and the accuracy anomaly is STILL recorded alongside it.
+test('evaluateGeofence mandatory + outside + poor accuracy -> blocked AND accuracyAnomaly (I1)', () => {
   const verdict = evaluateGeofence({
     policy: MANDATORY,
     latitude: 0,
     longitude: 0,
-    accuracyM: 10,
+    accuracyM: 100,
     locations: [JAKARTA],
   });
 
-  assert.equal(verdict.kind, 'outside_blocked');
-  assert.equal(verdict.distanceM, undefined);
-  assert.equal(verdict.locationId, undefined);
+  assert.equal(verdict.inside, false);
+  assert.equal(verdict.blocked, true);
+  assert.equal(verdict.accuracyAnomaly, true);
+  assert.equal(verdictToOutcome(verdict), 'blocked');
 });
 
-test('evaluateGeofence returns outside_accepted for optional policy outside all locations', () => {
-  const verdict = evaluateGeofence({
-    policy: OPTIONAL,
-    latitude: 0,
-    longitude: 0,
-    accuracyM: 10,
-    locations: [JAKARTA],
-  });
-
-  assert.equal(verdict.kind, 'outside_accepted');
-  assert.equal(typeof verdict.distanceM, 'number');
-  assert.ok(verdict.distanceM! > 150);
-});
-
-test('evaluateGeofence returns no_location_blocked for mandatory policy with null coords', () => {
-  const verdict = evaluateGeofence({
-    policy: MANDATORY,
-    latitude: null,
-    longitude: null,
-    accuracyM: null,
-    locations: [JAKARTA],
-  });
-
-  assert.equal(verdict.kind, 'no_location_blocked');
-  assert.equal(verdict.distanceM, undefined);
-  assert.equal(verdict.locationId, undefined);
-});
-
-test('evaluateGeofence returns no_location_accepted for optional policy with null coords', () => {
-  const verdict = evaluateGeofence({
-    policy: OPTIONAL,
-    latitude: null,
-    longitude: null,
-    accuracyM: null,
-    locations: [JAKARTA],
-  });
-
-  assert.equal(verdict.kind, 'no_location_accepted');
-  assert.equal(verdict.distanceM, undefined);
-  assert.equal(verdict.locationId, undefined);
-});
-
-test('evaluateGeofence returns accuracy_review when accuracyM exceeds maxAccuracyM (inside)', () => {
+test('evaluateGeofence mandatory + inside + poor accuracy -> accepted, needs_review (accuracy)', () => {
   const verdict = evaluateGeofence({
     policy: MANDATORY,
     latitude: -6.2,
@@ -322,23 +316,68 @@ test('evaluateGeofence returns accuracy_review when accuracyM exceeds maxAccurac
     locations: [JAKARTA],
   });
 
-  assert.equal(verdict.kind, 'accuracy_review');
+  assert.equal(verdict.inside, true);
+  assert.equal(verdict.blocked, false);
+  assert.equal(verdict.accuracyAnomaly, true);
   assert.equal(verdict.locationId, 'loc-jkt');
   assert.equal(typeof verdict.distanceM, 'number');
+  assert.equal(verdictToOutcome(verdict), 'needs_review');
 });
 
-test('evaluateGeofence returns accuracy_review when accuracyM exceeds maxAccuracyM (outside)', () => {
+test('evaluateGeofence optional + outside + poor accuracy -> accepted, both facts recorded', () => {
+  const verdict = evaluateGeofence({
+    policy: OPTIONAL,
+    latitude: 0,
+    longitude: 0,
+    accuracyM: 100,
+    locations: [JAKARTA],
+  });
+
+  // optional always accepts, but the verdict carries BOTH the accuracy flag
+  // and the inside/outside fact for review context.
+  assert.equal(verdict.inside, false);
+  assert.equal(verdict.blocked, false);
+  assert.equal(verdict.accuracyAnomaly, true);
+  assert.equal(typeof verdict.distanceM, 'number');
+  assert.ok(verdict.distanceM! > 150);
+  assert.equal(verdict.locationId, undefined);
+  assert.equal(verdictToOutcome(verdict), 'needs_review');
+});
+
+test('evaluateGeofence mandatory + outside + good accuracy -> blocked, no anomaly', () => {
   const verdict = evaluateGeofence({
     policy: MANDATORY,
     latitude: 0,
     longitude: 0,
-    accuracyM: 75,
+    accuracyM: 10,
     locations: [JAKARTA],
   });
 
-  assert.equal(verdict.kind, 'accuracy_review');
+  assert.equal(verdict.inside, false);
+  assert.equal(verdict.blocked, true);
+  assert.equal(verdict.accuracyAnomaly, false);
   assert.equal(verdict.locationId, undefined);
-  assert.equal(typeof verdict.distanceM, 'number');
+  assert.equal(verdictToOutcome(verdict), 'blocked');
+});
+
+// M2 — with no valid locations there is no nearest location; distanceM must be
+// left undefined, never reported as 0.
+test('evaluateGeofence optional + empty locations -> not blocked, distanceM undefined (not 0)', () => {
+  const verdict = evaluateGeofence({
+    policy: OPTIONAL,
+    latitude: -6.2,
+    longitude: 106.816,
+    accuracyM: 10,
+    locations: [],
+  });
+
+  assert.equal(verdict.inside, false);
+  assert.equal(verdict.blocked, false);
+  assert.equal(verdict.accuracyAnomaly, false);
+  assert.equal(verdict.distanceM, undefined);
+  assert.notEqual(verdict.distanceM, 0);
+  assert.equal(verdict.locationId, undefined);
+  assert.equal(verdictToOutcome(verdict), 'accepted');
 });
 
 test('evaluateGeofence boundary: on-radius counts as inside', () => {
@@ -352,33 +391,45 @@ test('evaluateGeofence boundary: on-radius counts as inside', () => {
     locations: [boundary],
   });
 
-  assert.equal(verdict.kind, 'inside');
+  assert.equal(verdict.inside, true);
+  assert.equal(verdict.blocked, false);
   assert.equal(verdict.locationId, 'loc-boundary');
 });
 
-test('evaluateGeofence accuracy_review takes precedence over inside/outside verdicts', () => {
-  // Inside with bad accuracy -> accuracy_review (not inside)
-  const v1 = evaluateGeofence({
+test('evaluateGeofence null coords + mandatory -> blocked (inside null, no accuracy eval)', () => {
+  const verdict = evaluateGeofence({
     policy: MANDATORY,
-    latitude: -6.2,
-    longitude: 106.816,
-    accuracyM: 100,
+    latitude: null,
+    longitude: null,
+    accuracyM: null,
     locations: [JAKARTA],
   });
-  assert.equal(v1.kind, 'accuracy_review');
 
-  // Outside with bad accuracy -> accuracy_review (not outside_blocked)
-  const v2 = evaluateGeofence({
-    policy: MANDATORY,
-    latitude: 0,
-    longitude: 0,
-    accuracyM: 100,
-    locations: [JAKARTA],
-  });
-  assert.equal(v2.kind, 'accuracy_review');
+  assert.equal(verdict.inside, null);
+  assert.equal(verdict.blocked, true);
+  assert.equal(verdict.accuracyAnomaly, false);
+  assert.equal(verdict.distanceM, undefined);
+  assert.equal(verdict.locationId, undefined);
+  assert.equal(verdictToOutcome(verdict), 'blocked');
 });
 
-test('evaluateGeofence accuracy_review NOT triggered when accuracyM is null', () => {
+test('evaluateGeofence null coords + optional -> accepted (inside null)', () => {
+  const verdict = evaluateGeofence({
+    policy: OPTIONAL,
+    latitude: null,
+    longitude: null,
+    accuracyM: null,
+    locations: [JAKARTA],
+  });
+
+  assert.equal(verdict.inside, null);
+  assert.equal(verdict.blocked, false);
+  assert.equal(verdict.accuracyAnomaly, false);
+  assert.equal(verdict.distanceM, undefined);
+  assert.equal(verdictToOutcome(verdict), 'accepted');
+});
+
+test('evaluateGeofence accuracyAnomaly NOT set when accuracyM is null', () => {
   // accuracyM null means accuracy unknown; treated as acceptable for review purposes
   const verdict = evaluateGeofence({
     policy: MANDATORY,
@@ -388,10 +439,12 @@ test('evaluateGeofence accuracy_review NOT triggered when accuracyM is null', ()
     locations: [JAKARTA],
   });
 
-  assert.equal(verdict.kind, 'inside');
+  assert.equal(verdict.inside, true);
+  assert.equal(verdict.accuracyAnomaly, false);
+  assert.equal(verdictToOutcome(verdict), 'accepted');
 });
 
-test('evaluateGeofence accuracy_review NOT triggered when accuracyM equals maxAccuracyM', () => {
+test('evaluateGeofence accuracyAnomaly NOT set when accuracyM equals maxAccuracyM', () => {
   const verdict = evaluateGeofence({
     policy: MANDATORY,
     latitude: -6.2,
@@ -400,5 +453,7 @@ test('evaluateGeofence accuracy_review NOT triggered when accuracyM equals maxAc
     locations: [JAKARTA],
   });
 
-  assert.equal(verdict.kind, 'inside');
+  assert.equal(verdict.inside, true);
+  assert.equal(verdict.accuracyAnomaly, false);
+  assert.equal(verdictToOutcome(verdict), 'accepted');
 });
