@@ -91,10 +91,20 @@ function formatDate(year: number, month: number, day: number): string {
   return `${year}-${mm}-${dd}`;
 }
 
-/** Parses an `HH:MM[:SS]` local time string into minutes since midnight. */
-function parseLocalMinutes(local: string): number {
+/**
+ * Parses an `HH:MM[:SS]` local time string into minutes since midnight.
+ * Throws on malformed input so callers fail loudly rather than compute with
+ * `NaN`.
+ */
+export function parseLocalMinutes(local: string): number {
   const [h, m] = local.split(':');
-  return Number(h) * 60 + Number(m);
+  const minutes = Number(h) * 60 + Number(m);
+  // `Number('') === 0`, so a missing hour (`':30'`) or a missing minute
+  // (`'09'`) would silently parse; require both components to be present.
+  if (h === undefined || m === undefined || h === '' || m === '' || !Number.isFinite(minutes)) {
+    throw new Error(`Invalid local time: ${JSON.stringify(local)} (expected HH:MM[:SS])`);
+  }
+  return minutes;
 }
 
 /** Local calendar date (YYYY-MM-DD) of `atUtc` in `timeZone`. */
@@ -107,24 +117,76 @@ function localDateString(atUtc: Date, timeZone: string): string {
  * Converts a local wall-clock time (`HH:MM` on `localDate`, a `YYYY-MM-DD`
  * string) in `timeZone` to the corresponding UTC instant.
  *
- * Strategy: start from the UTC instant obtained by interpreting the wall
- * time as UTC, then iteratively shift by the discrepancy between the target
- * wall time and the wall time the timezone shows. Settles within 3
- * iterations, robust across DST transitions.
+ * Strategy: start from the UTC instant obtained by interpreting the wall time
+ * as UTC, then iteratively shift by the discrepancy between the target wall
+ * time and the wall time the timezone shows. The day component of that
+ * discrepancy is the TRUE calendar day difference between the shown local
+ * date and the target date (computed from full y/m/d), so it is correct
+ * across month boundaries. Convergence is then VALIDATED: after the loop the
+ * local wall time is re-derived and must match the requested date and
+ * time-of-day exactly.
+ *
+ * DST behavior (fail loud, never silently wrong):
+ * - Normal and fixed-offset zones (e.g. Asia/Jakarta, no DST) converge and
+ *   are returned.
+ * - The spring-forward NONEXISTENT hour (a wall time that never occurs) fails
+ *   the post-loop convergence check and THROWS.
+ * - The fall-back AMBIGUOUS hour (a wall time that occurs twice) converges to
+ *   one of the two instants but fails the occurrence-count check and THROWS.
+ *
+ * @throws {Error} when the requested local wall time is nonexistent or
+ *   ambiguous (i.e. does not resolve to exactly one instant for the requested
+ *   date/time-of-day).
  */
-function localTimeToUtc(localDate: string, localTime: string, timeZone: string): Date {
+export function localTimeToUtc(localDate: string, localTime: string, timeZone: string): Date {
   const [year, month, day] = localDate.split('-').map(Number);
   const targetMinutes = parseLocalMinutes(localTime);
 
+  // Whole-day difference between two calendar dates, correct across month and
+  // year boundaries (unlike `shown.day - day`, which breaks at month ends).
+  const dayDiff = (sy: number, sm: number, sd: number): number =>
+    Math.round((Date.UTC(sy, sm - 1, sd) - Date.UTC(year, month - 1, day)) / MS_PER_DAY);
+
+  const matches = (p: { year: number; month: number; day: number; minutes: number }): boolean =>
+    p.year === year && p.month === month && p.day === day && p.minutes === targetMinutes;
+
   let utcMs = Date.UTC(year, month - 1, day, 0, 0, 0) + targetMinutes * 60_000;
-  for (let i = 0; i < 3; i += 1) {
+  for (let i = 0; i < 5; i += 1) {
     const shown = localParts(new Date(utcMs), timeZone);
     // Express the shown wall time as minutes relative to the target date so a
     // day-boundary wrap shows up as a multiple of MINUTES_PER_DAY.
-    const shownMinutes = shown.minutes + (shown.day - day) * MINUTES_PER_DAY;
+    const shownMinutes = shown.minutes + dayDiff(shown.year, shown.month, shown.day) * MINUTES_PER_DAY;
     const diffMinutes = targetMinutes - shownMinutes;
     if (diffMinutes === 0) break;
     utcMs += diffMinutes * 60_000;
+  }
+
+  // Post-loop validation: re-derive the local wall time and require an exact
+  // match with the requested date and time-of-day. A mismatch means the wall
+  // time never occurs (spring-forward gap); fail loud.
+  if (!matches(localParts(new Date(utcMs), timeZone))) {
+    throw new Error(
+      `Cannot resolve local time ${localDate} ${localTime} in ${timeZone}: ` +
+        `that wall-clock time does not exist (spring-forward DST gap).`,
+    );
+  }
+
+  // Ambiguity validation: a wall time that occurs twice (fall-back DST
+  // transition) has no single correct instant, so fail loud. Count the UTC
+  // instants that display this wall time on a minute grid over a ±2 hour
+  // window (any single DST offset change is ≤ 1 hour, and ±2h covers every
+  // real-world offset change); exactly one is required to be unambiguous.
+  let occurrences = 0;
+  for (let deltaMin = -120; deltaMin <= 120; deltaMin += 1) {
+    if (matches(localParts(new Date(utcMs + deltaMin * 60_000), timeZone))) {
+      occurrences += 1;
+    }
+  }
+  if (occurrences !== 1) {
+    throw new Error(
+      `Cannot resolve local time ${localDate} ${localTime} in ${timeZone}: ` +
+        `that wall-clock time is ambiguous (occurs ${occurrences} times during the fall-back DST transition).`,
+    );
   }
   return new Date(utcMs);
 }
