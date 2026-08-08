@@ -252,6 +252,57 @@ test('POST /attendance/events: rejects a non-JPEG / oversized selfie with VALIDA
   });
 });
 
+test('POST /attendance/events: an out-of-range latitude (99999) returns 400, never 500', async (t) => {
+  const fx = await setup(t);
+  await withEnv(envFor(fx), async () => {
+    const m = await seedMember(fx);
+    // numeric(9,6) overflows → SQLSTATE 22003 → 500 without the range gate.
+    const metadata = { eventType: 'check_in', idempotencyKey: 'k-lat', deviceOccurredAt: CHECKIN_AT, ...INSIDE, latitude: 99999 };
+    const res = await postEvent(authedReq('http://localhost/api/v1/attendance/events', m.token, { method: 'POST', body: multipart(metadata, SELFIE) }));
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, 'VALIDATION_FAILED');
+  });
+});
+
+test('POST /attendance/events: an accuracyM that overflows int (1e10) returns 400, never 500', async (t) => {
+  const fx = await setup(t);
+  await withEnv(envFor(fx), async () => {
+    const m = await seedMember(fx);
+    // accuracy_m is an int column; 1e10 exceeds int32 → SQLSTATE 22003 → 500 without the range gate.
+    const metadata = { eventType: 'check_in', idempotencyKey: 'k-acc-over', deviceOccurredAt: CHECKIN_AT, ...INSIDE, accuracyM: 1e10 };
+    const res = await postEvent(authedReq('http://localhost/api/v1/attendance/events', m.token, { method: 'POST', body: multipart(metadata, SELFIE) }));
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, 'VALIDATION_FAILED');
+  });
+});
+
+test('POST /attendance/events: a negative accuracyM returns 400', async (t) => {
+  const fx = await setup(t);
+  await withEnv(envFor(fx), async () => {
+    const m = await seedMember(fx);
+    const metadata = { eventType: 'check_in', idempotencyKey: 'k-acc-neg', deviceOccurredAt: CHECKIN_AT, ...INSIDE, accuracyM: -5 };
+    const res = await postEvent(authedReq('http://localhost/api/v1/attendance/events', m.token, { method: 'POST', body: multipart(metadata, SELFIE) }));
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, 'VALIDATION_FAILED');
+  });
+});
+
+test('POST /attendance/events: a valid in-range request still returns 201', async (t) => {
+  const fx = await setup(t);
+  await withEnv(envFor(fx), async () => {
+    const m = await seedMember(fx);
+    const metadata = { eventType: 'check_in', idempotencyKey: 'k-valid-range', deviceOccurredAt: CHECKIN_AT, latitude: -6.2, longitude: 106.816666, accuracyM: 10, clockOffsetMs: -120 };
+    const res = await postEvent(authedReq('http://localhost/api/v1/attendance/events', m.token, { method: 'POST', body: multipart(metadata, SELFIE) }));
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.equal(body.created, true);
+    assert.equal(body.outcome, 'accepted');
+  });
+});
+
 test('POST /attendance/events: duplicate idempotency key returns the ORIGINAL with created:false and HTTP 200', async (t) => {
   const fx = await setup(t);
   await withEnv(envFor(fx), async () => {
@@ -386,6 +437,16 @@ test('GET /attendance/events/[id]: another user in the same tenant gets 404 (no 
   });
 });
 
+test('GET /attendance/events/[id]: a malformed (non-UUID) id returns 404, never 500', async (t) => {
+  const fx = await setup(t);
+  await withEnv(envFor(fx), async () => {
+    const m = await seedMember(fx);
+    // 'not-a-uuid' would make `id = $1` raise SQLSTATE 22P02 → 500 without the UUID gate.
+    const res = await getEvent(authedReq('http://localhost/api/v1/attendance/events/not-a-uuid', m.token), { params: Promise.resolve({ id: 'not-a-uuid' }) });
+    assert.equal(res.status, 404);
+  });
+});
+
 test('GET /objects/[id]: streams the selfie to an authorized same-tenant session', async (t) => {
   const fx = await setup(t);
   await withEnv(envFor(fx), async () => {
@@ -464,6 +525,37 @@ test('GET /manager/team/today: returns only the manager assigned-team members to
     assert.ok(!names.includes('Other'), 'unassigned team member excluded');
     const memberEntry = body.members.find((x: { displayName: string }) => x.displayName === 'Member');
     assert.ok(memberEntry.workDate, 'today work date present');
+  });
+});
+
+test('GET /manager/team/today: a member in two of the manager\'s teams appears exactly once', async (t) => {
+  const fx = await setup(t);
+  await withEnv(envFor(fx), async () => {
+    const tenantId = await insertTenant(fx.pool);
+    const scheduleId = await insertSchedule(fx.pool, tenantId);
+
+    const manager = await insertUser(fx.pool, tenantId, { name: 'Mgr' });
+    await insertRole(fx.pool, manager, 'manager');
+    const member = await insertUser(fx.pool, tenantId, { name: 'Member' });
+    await insertRole(fx.pool, member, 'employee');
+    await assignSchedule(fx.pool, member, scheduleId);
+
+    // Two teams, BOTH assigned to the same manager, BOTH containing the member.
+    const teamA = await fx.pool.query<{ id: string }>(`INSERT INTO teams (tenant_id, name) VALUES ($1, 'Alpha') RETURNING id`, [tenantId]);
+    const teamB = await fx.pool.query<{ id: string }>(`INSERT INTO teams (tenant_id, name) VALUES ($1, 'Beta') RETURNING id`, [tenantId]);
+    for (const team of [teamA.rows[0].id, teamB.rows[0].id]) {
+      await fx.pool.query(`INSERT INTO team_members (team_id, user_id) VALUES ($1, $2)`, [team, member]);
+      await fx.pool.query(`INSERT INTO manager_teams (manager_user_id, team_id) VALUES ($1, $2)`, [manager, team]);
+    }
+
+    const managerToken = await makeSession(manager);
+    const res = await getTeamToday(authedReq('http://localhost/api/v1/manager/team/today', managerToken));
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const occurrences = body.members.filter((x: { userId: string }) => x.userId === member);
+    assert.equal(occurrences.length, 1, 'member in two managed teams must appear exactly once');
+    // The single surfaced team label is deterministic: lowest team name (Alpha).
+    assert.equal(occurrences[0].teamName, 'Alpha');
   });
 });
 

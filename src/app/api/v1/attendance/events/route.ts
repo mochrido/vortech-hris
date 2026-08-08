@@ -18,6 +18,10 @@ export const revalidate = 0;
 /** Small ceiling for the JSON metadata field (raw proof only; never large). */
 const METADATA_MAX_CHARS = 8 * 1024;
 
+/** Signed 32-bit integer bounds — the PG `int` columns reject anything wider. */
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
+
 interface EventMetadata {
   eventType?: unknown;
   idempotencyKey?: unknown;
@@ -38,6 +42,56 @@ function coerceNumber(value: unknown, field: string): number | null {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) {
     throw badRequest(`${field} must be a finite number`);
+  }
+  return n;
+}
+
+/**
+ * These columns are `numeric(9,6)` / `int` in the DB. A value that fits the JS
+ * number type but overflows the column raises SQLSTATE 22003 (numeric overflow)
+ * on INSERT, which surfaces as a 500. Range-checking here turns that into the
+ * correct client error: 400 VALIDATION_FAILED, never a 500.
+ */
+function coerceLatitude(value: unknown): number | null {
+  const n = coerceNumber(value, 'latitude');
+  if (n === null) return null;
+  if (n < -90 || n > 90) {
+    throw badRequest('latitude must be between -90 and 90');
+  }
+  return n;
+}
+
+function coerceLongitude(value: unknown): number | null {
+  const n = coerceNumber(value, 'longitude');
+  if (n === null) return null;
+  if (n < -180 || n > 180) {
+    throw badRequest('longitude must be between -180 and 180');
+  }
+  return n;
+}
+
+/** accuracy_m is a non-negative int column; reject negatives and int32 overflow. */
+function coerceAccuracyM(value: unknown): number | null {
+  const n = coerceNumber(value, 'accuracyM');
+  if (n === null) return null;
+  if (!Number.isInteger(n) || n < 0) {
+    throw badRequest('accuracyM must be a non-negative integer');
+  }
+  if (n > INT32_MAX) {
+    throw badRequest(`accuracyM must be at most ${INT32_MAX}`);
+  }
+  return n;
+}
+
+/** clock_offset_ms is a signed int column; reject int32 overflow. */
+function coerceClockOffsetMs(value: unknown): number | null {
+  const n = coerceNumber(value, 'clockOffsetMs');
+  if (n === null) return null;
+  if (!Number.isInteger(n)) {
+    throw badRequest('clockOffsetMs must be an integer');
+  }
+  if (n < INT32_MIN || n > INT32_MAX) {
+    throw badRequest(`clockOffsetMs must be between ${INT32_MIN} and ${INT32_MAX}`);
   }
   return n;
 }
@@ -93,11 +147,11 @@ function parseMetadata(raw: string): {
     eventType: parsed.eventType,
     idempotencyKey: parsed.idempotencyKey,
     deviceOccurredAt,
-    latitude: coerceNumber(parsed.latitude, 'latitude'),
-    longitude: coerceNumber(parsed.longitude, 'longitude'),
-    accuracyM: coerceNumber(parsed.accuracyM, 'accuracyM'),
+    latitude: coerceLatitude(parsed.latitude),
+    longitude: coerceLongitude(parsed.longitude),
+    accuracyM: coerceAccuracyM(parsed.accuracyM),
     locationAcquiredAt: coerceDate(parsed.locationAcquiredAt, 'locationAcquiredAt'),
-    clockOffsetMs: coerceNumber(parsed.clockOffsetMs, 'clockOffsetMs'),
+    clockOffsetMs: coerceClockOffsetMs(parsed.clockOffsetMs),
   };
 }
 
