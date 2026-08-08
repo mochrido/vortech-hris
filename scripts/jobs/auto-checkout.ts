@@ -39,10 +39,18 @@ async function main(): Promise<void> {
     const startedAt = new Date();
     const summary = await closeOpenWorkInstances(pool, startedAt);
     console.log(
-      `auto-checkout: closed ${summary.closed} open work instance(s) past their scheduled end (run at ${startedAt.toISOString()}).`,
+      `auto-checkout: closed ${summary.closed} open work instance(s) past their scheduled end, ${summary.failed} failed (run at ${startedAt.toISOString()}).`,
     );
     if (summary.instanceIds.length > 0) {
-      console.log(`auto-checkout: instance ids: ${summary.instanceIds.join(', ')}`);
+      console.log(`auto-checkout: closed instance ids: ${summary.instanceIds.join(', ')}`);
+    }
+    for (const failure of summary.failures) {
+      console.error(`auto-checkout: FAILED instance ${failure.instanceId}: ${failure.error}`);
+    }
+    // Exit non-zero only when at least one instance failed to close; a fully
+    // clean run (or a run with nothing to do) exits 0.
+    if (summary.failed > 0) {
+      process.exitCode = 1;
     }
   } finally {
     await pool.end();

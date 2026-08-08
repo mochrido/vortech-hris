@@ -11,11 +11,21 @@ function isPool(client: Queryable): client is PoolLike {
   return typeof (client as PoolLike).connect === 'function';
 }
 
+/** A work instance this run failed to close (logged and skipped, not fatal). */
+export interface AutoCheckoutFailure {
+  instanceId: string;
+  error: string;
+}
+
 export interface AutoCheckoutSummary {
   /** Number of work instances newly closed by this run. */
   closed: number;
   /** Ids of the work instances closed by this run. */
   instanceIds: string[];
+  /** Number of candidate instances that failed to close in this run. */
+  failed: number;
+  /** Per-instance failure details (instanceId + error message). */
+  failures: AutoCheckoutFailure[];
 }
 
 interface OpenInstanceRow {
@@ -90,12 +100,17 @@ async function insertAnomaly(
  *
  * Instances that already checked out, or whose shift has not ended yet, are
  * untouched. Running the function twice is idempotent: the second run closes
- * nothing and returns { closed: 0, instanceIds: [] }.
+ * nothing and returns { closed: 0, failed: 0, instanceIds: [], failures: [] }.
  *
  * When handed a pg.Pool, each instance is closed in its own transaction so a
  * failure on one instance does not roll back the others. When handed an
  * already-transactional client, all closures run inline inside the caller's
  * transaction.
+ *
+ * Per-instance failure isolation: a failure on one instance (including a
+ * pathological row such as an orphaned check_in_event_id or a deleted
+ * schedule) is logged, tallied in the summary's `failures`, and the run
+ * CONTINUES with the next instance — one bad row never aborts the run.
  */
 export async function closeOpenWorkInstances(client: Queryable, now: Date): Promise<AutoCheckoutSummary> {
   const candidates = await client.query<OpenInstanceRow>(
@@ -110,11 +125,22 @@ export async function closeOpenWorkInstances(client: Queryable, now: Date): Prom
   );
 
   const instanceIds: string[] = [];
+  const failures: AutoCheckoutFailure[] = [];
   for (const row of candidates.rows) {
-    await closeOne(client, row);
-    instanceIds.push(row.id);
+    // Isolate per-instance failures: one bad row must not abort the run (and
+    // wedge every subsequent run behind the same poisoned candidate).
+    try {
+      await closeOne(client, row);
+      instanceIds.push(row.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `auto-checkout: failed to close work instance ${row.id} (tenant ${row.tenant_id}): ${message}`,
+      );
+      failures.push({ instanceId: row.id, error: message });
+    }
   }
-  return { closed: instanceIds.length, instanceIds };
+  return { closed: instanceIds.length, instanceIds, failed: failures.length, failures };
 }
 
 /** Runs `fn` in a transaction when `client` is a pool; inline otherwise. */
@@ -158,18 +184,25 @@ async function runClose(tx: Queryable, row: OpenInstanceRow): Promise<void> {
   );
   const eventId = eventInsert.rows.length > 0 ? eventInsert.rows[0].id : null;
 
-  const checkIn = await tx.query<{ device_occurred_at: Date }>(
-    `SELECT device_occurred_at FROM attendance_events WHERE id = $1`,
-    [row.check_in_event_id],
-  );
-  const schedule = await tx.query<{ break_minutes: number }>(
-    `SELECT s.break_minutes
+  // Single JOIN: check-in timestamp + schedule break in one round-trip.
+  // LEFT JOINs so an orphaned check-in event or a deleted schedule surfaces
+  // as NULL rather than silently dropping the row.
+  const context = await tx.query<{ check_in_at: Date | null; break_minutes: number | null }>(
+    `SELECT ci.device_occurred_at AS check_in_at, s.break_minutes
        FROM work_instances wi
-       JOIN schedules s ON s.id = wi.schedule_id
+       LEFT JOIN attendance_events ci ON ci.id = wi.check_in_event_id
+       LEFT JOIN schedules s ON s.id = wi.schedule_id
       WHERE wi.id = $1`,
     [row.id],
   );
-  const worked = workedMinutes(checkIn.rows[0].device_occurred_at, row.scheduled_end_at, schedule.rows[0].break_minutes);
+  const checkInAt = context.rows[0]?.check_in_at;
+  const breakMinutes = context.rows[0]?.break_minutes;
+  if (checkInAt == null || breakMinutes == null) {
+    throw new Error(
+      `cannot auto-close work instance ${row.id}: missing check-in event ${row.check_in_event_id} or schedule row`,
+    );
+  }
+  const worked = workedMinutes(checkInAt, row.scheduled_end_at, breakMinutes);
 
   // Guard the update on "still has no check-out": if a real check-out won the
   // race, this run must not clobber it (the pre-inserted auto-checkout event

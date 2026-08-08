@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -95,6 +96,20 @@ async function assignSchedule(pool: pg.Pool, tenantId: string, userId: string, s
   );
 }
 
+/** Cross-midnight Mon-Fri 22:00-06:00 schedule, break 30. */
+async function insertNightSchedule(pool: pg.Pool, tenantId: string): Promise<string> {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO schedules (tenant_id, name, timezone, start_local, end_local, crosses_midnight, grace_minutes, break_minutes)
+     VALUES ($1, $2, $3, $4, $5, true, 10, 30) RETURNING id`,
+    [tenantId, 'Night Shift', TZ, '22:00', '06:00'],
+  );
+  const scheduleId = result.rows[0].id;
+  for (const weekday of [1, 2, 3, 4, 5]) {
+    await pool.query(`INSERT INTO schedule_days (schedule_id, weekday) VALUES ($1, $2)`, [scheduleId, weekday]);
+  }
+  return scheduleId;
+}
+
 interface Seed {
   tenantId: string;
   userId: string;
@@ -145,6 +160,31 @@ async function insertCheckIn(pool: pg.Pool, seed: Seed, workInstanceId: string, 
     workInstanceId,
   ]);
   return eventId;
+}
+
+/**
+ * Points an instance's check_in_event_id at a non-existent event id (an
+ * orphaned reference, e.g. as left behind by a partial restore). FK trigger
+ * constraints are disabled for the write; the test admin is a superuser.
+ */
+async function orphanCheckInEventId(pool: pg.Pool, workInstanceId: string): Promise<string> {
+  const orphanId = crypto.randomUUID();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL session_replication_role = 'replica'`);
+    await client.query(`UPDATE work_instances SET check_in_event_id = $1, updated_at = now() WHERE id = $2`, [
+      orphanId,
+      workInstanceId,
+    ]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return orphanId;
 }
 
 interface WorkInstanceSnapshot {
@@ -359,4 +399,207 @@ test('autoCheckout: a very short shift computes worked_minutes clamped at 0', as
 
   const wi = await snapshot(fixture.pool, wiId);
   assert.equal(wi.worked_minutes, 0); // max(0, 30 - 60)
+});
+
+// ---------------------------------------------------------------------------
+// Per-instance failure isolation: one bad row does not abort the run
+// ---------------------------------------------------------------------------
+test('autoCheckout: a pathological candidate is tallied as a failure and later instances still close', async (t) => {
+  const fixture = await setupDb(t);
+  // Separate workers: UNIQUE(tenant_id, user_id, work_date, schedule_id) means
+  // one worker can only hold one instance per (date, schedule).
+  const badSeed = await seedWorker(fixture.pool, 'ac-iso-bad', 'bad@acme.test');
+  const okSeed = await seedWorker(fixture.pool, 'ac-iso-ok', 'ok@acme.test');
+  const wiId = await insertWorkInstance(fixture.pool, badSeed, 'in_progress');
+
+  // Pathological row: an orphaned check_in_event_id pointing at a non-existent
+  // event. runClose's JOIN finds no check-in row and raises a per-instance
+  // failure instead of crashing the run.
+  await orphanCheckInEventId(fixture.pool, wiId);
+
+  // A healthy instance whose scheduled_end_at sorts AFTER the pathological
+  // one, so the scan hits the bad row first.
+  const healthyWi = await insertWorkInstance(fixture.pool, okSeed, 'in_progress');
+  await insertCheckIn(fixture.pool, okSeed, healthyWi, 'in-healthy');
+  await fixture.pool.query(
+    `UPDATE work_instances SET scheduled_end_at = $1, updated_at = now() WHERE id = $2`,
+    [new Date('2026-08-06T10:30:00.000Z'), healthyWi], // 17:30 local, still past `now`
+  );
+
+  const now = new Date('2026-08-06T11:00:00.000Z'); // 18:00 local
+  const summary = await closeOpenWorkInstances(fixture.pool, now);
+
+  // The run did NOT abort: the healthy instance closed.
+  assert.equal(summary.closed, 1);
+  assert.deepEqual(summary.instanceIds, [healthyWi]);
+  // The pathological row was tallied as a failure, not thrown.
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.failures.length, 1);
+  assert.equal(summary.failures[0].instanceId, wiId);
+  assert.match(summary.failures[0].error, /missing check-in event|schedule/i);
+
+  // The healthy instance really closed; the pathological one is untouched.
+  const healthy = await snapshot(fixture.pool, healthyWi);
+  assert.equal(healthy.status, 'auto_closed');
+  assert.ok(healthy.check_out_event_id);
+
+  const pathological = await snapshot(fixture.pool, wiId);
+  assert.equal(pathological.status, 'in_progress');
+  assert.equal(pathological.check_out_event_id, null);
+
+  // Re-running does not wedge: the pathological row fails again, the healthy
+  // one is already closed and untouched.
+  const second = await closeOpenWorkInstances(fixture.pool, now);
+  assert.equal(second.closed, 0);
+  assert.equal(second.failed, 1);
+  assert.equal(second.failures[0].instanceId, wiId);
+});
+
+// ---------------------------------------------------------------------------
+// Pathological row: missing schedule is a tallied failure, not an abort
+// ---------------------------------------------------------------------------
+test('autoCheckout: a candidate whose schedule row is missing is tallied as a failure', async (t) => {
+  const fixture = await setupDb(t);
+  // An orphaned check_in_event_id (a dangling reference, e.g. left behind by a
+  // partial restore) makes runClose's JOIN find no check-in row.
+  const seed = await seedWorker(fixture.pool, 'ac-nosched', 'nosched@acme.test');
+  const workInstanceId = await insertWorkInstance(fixture.pool, seed, 'in_progress');
+  await orphanCheckInEventId(fixture.pool, workInstanceId);
+
+  const summary = await closeOpenWorkInstances(fixture.pool, new Date('2026-08-06T11:00:00.000Z'));
+
+  assert.equal(summary.closed, 0);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.failures[0].instanceId, workInstanceId);
+  assert.match(summary.failures[0].error, /missing check-in event|schedule/i);
+
+  const wi = await snapshot(fixture.pool, workInstanceId);
+  assert.equal(wi.status, 'in_progress');
+  assert.equal(wi.check_out_event_id, null);
+});
+
+// ---------------------------------------------------------------------------
+// A worker's real check-out committed mid-run is NOT clobbered
+// ---------------------------------------------------------------------------
+test('autoCheckout: a real check-out committed while the job runs is not clobbered', async (t) => {
+  const fixture = await setupDb(t);
+  const seed = await seedWorker(fixture.pool, 'ac-race', 'race@acme.test');
+  const wiId = await insertWorkInstance(fixture.pool, seed, 'in_progress');
+  await insertCheckIn(fixture.pool, seed, wiId, 'in-1');
+
+  // Worker 1: open a job transaction and pre-insert the auto-checkout event
+  // (the candidate has already been scanned). Pause BEFORE the guarded UPDATE.
+  const worker = await fixture.pool.connect();
+  const autoEventId = `auto-checkout:${wiId}`;
+  try {
+    await worker.query('BEGIN');
+    await worker.query(
+      `INSERT INTO attendance_events (
+         tenant_id, user_id, work_instance_id, event_type, idempotency_key,
+         device_occurred_at, source, geofence_result, status
+       ) VALUES ($1, $2, $3, 'check_out', $4, $5, 'system_auto_checkout', 'unverified', 'accepted')
+       ON CONFLICT (tenant_id, user_id, idempotency_key) DO NOTHING`,
+      [seed.tenantId, seed.userId, wiId, autoEventId, SCHEDULE_END_UTC],
+    );
+
+    // Interleave on worker 2: the worker's REAL check-out commits first.
+    const real = await fixture.pool.query<{ id: string }>(
+      `INSERT INTO attendance_events (
+         tenant_id, user_id, work_instance_id, event_type, idempotency_key,
+         device_occurred_at, source, latitude, longitude, accuracy_m, geofence_result, status
+       ) VALUES ($1, $2, $3, 'check_out', 'out-real', $4, 'web_online', $5, $6, 10, 'inside', 'accepted')
+       RETURNING id`,
+      [seed.tenantId, seed.userId, wiId, new Date('2026-08-06T10:05:00.000Z'), LOC.latitude, LOC.longitude],
+    );
+    const realCheckOutId = real.rows[0].id;
+    await fixture.pool.query(
+      `UPDATE work_instances SET check_out_event_id = $1, worked_minutes = 435, status = 'completed', updated_at = now() WHERE id = $2`,
+      [realCheckOutId, wiId],
+    );
+
+    // Back on worker 1: the guarded UPDATE must affect 0 rows because
+    // check_out_event_id is no longer NULL.
+    const autoEvent = await worker.query<{ id: string }>(
+      `SELECT id FROM attendance_events WHERE tenant_id = $1 AND user_id = $2 AND idempotency_key = $3`,
+      [seed.tenantId, seed.userId, autoEventId],
+    );
+    const guarded = await worker.query<{ id: string }>(
+      `UPDATE work_instances
+          SET check_out_event_id = $1, worked_minutes = 430, status = 'auto_closed',
+              review_status = 'needs_review', updated_at = now()
+        WHERE id = $2 AND check_out_event_id IS NULL
+        RETURNING id`,
+      [autoEvent.rows[0].id, wiId],
+    );
+    assert.equal(guarded.rows.length, 0, "the job's guarded update must not clobber the worker's check-out");
+    await worker.query('COMMIT');
+
+    // The instance keeps the worker's real check-out and is NOT auto_closed.
+    const wi = await snapshot(fixture.pool, wiId);
+    assert.equal(wi.check_out_event_id, realCheckOutId);
+    assert.equal(wi.status, 'completed');
+    assert.equal(wi.review_status, 'clean');
+    assert.equal(wi.worked_minutes, 435);
+  } finally {
+    worker.release();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Cross-midnight schedule: scheduled_end_at lands the next day
+// ---------------------------------------------------------------------------
+test('autoCheckout: a cross-midnight instance closes with worked_minutes spanning into the next day', async (t) => {
+  const fixture = await setupDb(t);
+  const seed = await seedWorker(fixture.pool, 'ac-night', 'night@acme.test');
+  const nightSchedule = await insertNightSchedule(fixture.pool, seed.tenantId);
+
+  // Night shift 2026-08-06 22:00 -> 2026-08-07 06:00 Asia/Jakarta.
+  // 22:00 +0700 = 15:00 UTC (8/6); 06:00 +0700 next day = 23:00 UTC (8/6).
+  const result = await fixture.pool.query<{ id: string }>(
+    `INSERT INTO work_instances (tenant_id, user_id, work_date, schedule_id, scheduled_start_at, scheduled_end_at, status)
+     VALUES ($1, $2, $3::date, $4, $5, $6, 'in_progress') RETURNING id`,
+    [
+      seed.tenantId,
+      seed.userId,
+      WORK_DATE,
+      nightSchedule,
+      new Date('2026-08-06T15:00:00.000Z'), // 22:00 local start
+      new Date('2026-08-06T23:00:00.000Z'), // 06:00 local NEXT day end
+    ],
+  );
+  const wiId = result.rows[0].id;
+
+  // Check-in at 21:55 local (14:55 UTC).
+  const checkIn = await fixture.pool.query<{ id: string }>(
+    `INSERT INTO attendance_events (
+       tenant_id, user_id, work_instance_id, event_type, idempotency_key,
+       device_occurred_at, source, latitude, longitude, accuracy_m, geofence_result, status
+     ) VALUES ($1, $2, $3, 'check_in', 'in-night', $4, 'web_online', $5, $6, 10, 'inside', 'accepted')
+     RETURNING id`,
+    [seed.tenantId, seed.userId, wiId, new Date('2026-08-06T14:55:00.000Z'), LOC.latitude, LOC.longitude],
+  );
+  await fixture.pool.query(`UPDATE work_instances SET check_in_event_id = $1, updated_at = now() WHERE id = $2`, [
+    checkIn.rows[0].id,
+    wiId,
+  ]);
+
+  // 07:00 local next day (00:00 UTC 8/7): the shift ended an hour ago.
+  const summary = await closeOpenWorkInstances(fixture.pool, new Date('2026-08-07T00:00:00.000Z'));
+
+  assert.equal(summary.closed, 1);
+  assert.equal(summary.failed, 0);
+  assert.deepEqual(summary.instanceIds, [wiId]);
+
+  const wi = await snapshot(fixture.pool, wiId);
+  assert.equal(wi.status, 'auto_closed');
+  assert.ok(wi.check_out_event_id);
+  // 14:55 UTC -> 23:00 UTC = 485 min elapsed; minus 30 break = 455.
+  assert.equal(wi.worked_minutes, 455);
+
+  // The auto-checkout event occurred at the cross-midnight scheduled end.
+  const event = await fixture.pool.query<{ device_occurred_at: Date }>(
+    `SELECT device_occurred_at FROM attendance_events WHERE id = $1`,
+    [wi.check_out_event_id],
+  );
+  assert.equal(event.rows[0].device_occurred_at.toISOString(), '2026-08-06T23:00:00.000Z');
 });
