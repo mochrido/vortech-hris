@@ -145,3 +145,37 @@ test('objects: readObject rejects an id that does not belong to the tenant', asy
     /not found|forbidden/i,
   );
 });
+
+test('objects: a soft-deleted object (deleted_at set) reads as not-found', async (t) => {
+  const fixture = await setupDb(t);
+  const storageDir = await setupStorageDir(t);
+  const buffer = Buffer.from('soft-deleted-selfie-bytes');
+
+  const stored = await storeObject(fixture.pool, {
+    tenantId: fixture.tenantId,
+    kind: 'selfie',
+    buffer,
+    mediaType: 'image/jpeg',
+    storageDir,
+  });
+
+  // Sanity: readable before the soft delete.
+  const before = await readObject(fixture.pool, { tenantId: fixture.tenantId, id: stored.id, storageDir });
+  assert.deepEqual(before.buffer, buffer);
+
+  // Soft-delete: mark the row deleted (retention sweep), keep the file on disk.
+  await fixture.pool.query(`UPDATE stored_objects SET deleted_at = now() WHERE id = $1`, [stored.id]);
+
+  // readObject must treat deleted_at !== null as not-found, even though the
+  // bytes still exist on disk (objects.ts deleted_at guard).
+  await assert.rejects(
+    readObject(fixture.pool, { tenantId: fixture.tenantId, id: stored.id, storageDir }),
+    /not found/i,
+  );
+
+  // The file is still on disk (soft delete removes visibility, not bytes) and
+  // getObjectPath still resolves it — only the read path applies the guard.
+  const absolute = getObjectPath(stored.relativePath, storageDir);
+  const onDisk = await fs.readFile(absolute);
+  assert.deepEqual(onDisk, buffer);
+});

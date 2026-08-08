@@ -19,8 +19,11 @@ If a decision changes, update this file and note the change in `CHANGELOG.md`.
 
 ## Uploads and branding
 
-5. **Selfie upload** — Hard ceiling **1 MB**. Browser resizes to ~1280px longest edge; server
-   re-encodes to **JPEG quality 80** after validating decoded format/dimensions/signature.
+5. **Selfie upload** — Hard ceiling **1 MB**. The browser resizes to ~**1280px** longest edge
+   and re-encodes to **JPEG quality 80** client-side (Canvas). The server does NOT decode or
+   re-encode pixels (no native image library); it independently validates the untrusted bytes —
+   JPEG magic bytes (SOI/EOI), size (<= **1 MB**), and declared dimensions (<= **1280px**
+   longest edge) — and stores the validated blob as-is.
 6. **Branding files** — Logo **512px / 300 KB**, PWA icon **512px / 300 KB**, splash
    **1600px / 1 MB**. Validate MIME, decoded format, dimensions, and size.
 
