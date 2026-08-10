@@ -429,6 +429,52 @@ function CaptureDialog({
     dialogRef.current?.focus();
   }, []);
 
+  // Keep the latest submitting flag readable from the keydown handler below
+  // (listener binds once on mount; this ref avoids a stale closure).
+  const submittingRef = useRef(submitting);
+  submittingRef.current = submitting;
+
+  // Accessibility: Escape cancels the dialog exactly like the Batal/×
+  // buttons (same onCancel → unmount cleanup), except while a submit is
+  // in-flight (matches the Batal button's disabled={submitting} guard).
+  // Tab / Shift+Tab cycle focus within the dialog so it cannot escape
+  // behind the modal backdrop.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        if (submittingRef.current) return;
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (!dialog.contains(active) || active === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (!dialog.contains(active) || active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onCancel]);
+
   const geoRequesting = geo.status === 'requesting' || geo.status === 'idle';
   const geoFailed = geo.status === 'permission_denied' || geo.status === 'unavailable' || geo.status === 'timeout';
   const geoLabel = geoRequesting
