@@ -15,6 +15,11 @@ services:
         condition: service_healthy
     expose:
       - "3000"
+    volumes:
+      # Persist uploaded selfie/object blobs (STORAGE_DIR=./data/objects) so they
+      # survive container recreates; stored_objects rows live in pgdata, so the
+      # blobs must too or GET /api/v1/objects/[id] 404s on existing rows.
+      - objects_data:/app/data/objects
     healthcheck:
       # node:22-alpine ships no curl/wget; use the Node runtime's global fetch.
       test:
@@ -97,6 +102,7 @@ volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  objects_data:
 
 networks:
   internal:

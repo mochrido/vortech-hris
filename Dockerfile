@@ -50,6 +50,11 @@ COPY --from=build --chown=node:node /app/src/lib ./src/lib
 RUN mkdir -p ./public
 COPY --from=build --chown=node:node /app/public ./public
 
+# Selfie/object storage lives at ./data/objects (STORAGE_DIR default). Pre-create
+# it owned by the unprivileged `node` user so the runtime can write even before
+# the named volume mounts, and so a root-owned /app doesn't block mkdir.
+RUN mkdir -p ./data/objects && chown -R node:node ./data
+
 USER node
 
 EXPOSE 3000
