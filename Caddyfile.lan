@@ -1,0 +1,36 @@
+# LAN-only variant of the Caddyfile, used for phone testing over HTTPS
+# (see README "Phone testing over LAN (HTTPS)"). Selected by
+# docker-compose.lan.yml — the production `Caddyfile` (public DOMAIN with
+# automatic ACME certificates) is untouched.
+#
+# Camera and geolocation are only available to pages in a secure context, so a
+# phone on the same Wi-Fi must reach the app over HTTPS. Serving on the PC's
+# LAN IP achieves that: Caddy issues a certificate for the IP from its own
+# local CA ("Caddy Local Authority") instead of a public ACME CA. The LAN IP
+# is not publicly routable, so no public CA could issue a cert for it anyway.
+#
+# LAN_IP is provided via the environment (see .env.example) and must be the
+# PC's current address on the local network, e.g. 192.168.1.50.
+
+https://{$LAN_IP} {
+	# Use Caddy's internal CA. The root certificate is generated on first run
+	# and stored in the caddy_data volume at
+	# /data/caddy/pki/authorities/local/root.crt — install it on the phone (or
+	# proceed past the browser warning) to clear the certificate error.
+	tls internal
+
+	reverse_proxy web:3000
+
+	# Security headers (defense in depth; the app also sets its own).
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Path-based tenancy (/{tenant-slug}/...) is handled at the app layer; Caddy
+	# simply proxies all paths through to the web service untouched.
+
+	encode zstd gzip
+}

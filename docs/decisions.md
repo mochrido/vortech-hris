@@ -64,3 +64,28 @@ If a decision changes, update this file and note the change in `CHANGELOG.md`.
     - `optional` (field_worker) → always accepted; the verdict records **both** the accuracy
       flag and the inside/outside fact for review context.
     The verdict type must carry the accuracy anomaly separately from the inside/outside result.
+
+## Phase status
+
+- **Phase 1 (online attendance) is complete.** Tenant login, online check-in/out
+  (selfie + GPS + geofence), attendance calculations, member and manager
+  dashboards, the shift-end auto-checkout job, and private object storage are
+  implemented and verified against the real backend.
+- Phase-1 scope decisions worth recording:
+  - **Client-side pixel re-encode only (reaffirms #5).** The browser produces
+    the validated, watermarked, resized JPEG via Canvas. The server does not
+    decode or re-encode pixels; it independently validates the untrusted bytes
+    (JPEG SOI/EOI magic bytes, size <= 1 MB, SOF-parsed dimensions <= 1280 px)
+    and stores the blob as-is. No native image library was added.
+  - **Accuracy anomaly is carried separately from inside/outside (implements #12).**
+    The geofence verdict records the accuracy flag independently, and a
+    mandatory block always applies when a worker is outside all assigned
+    locations even if accuracy was poor.
+  - **Member history and admin write are deferred to Phase 3.** The Phase 1
+    history view reads recent attendance from the member dashboard payload, and
+    the admin locations/policies/schedules pages are read shells — full CRUD is
+    Phase 3 scope. Offline/PWA sync is Phase 2.
+  - **LAN HTTPS phone testing is a dev/test aid, not a production TLS path.**
+    `Caddyfile.lan` + `docker-compose.lan.yml` serve the app at a LAN IP using
+    Caddy's internal CA so a phone can grant camera/GPS (secure context). The
+    production path remains `Caddyfile` + a public `DOMAIN` with ACME.
