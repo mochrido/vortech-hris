@@ -328,3 +328,30 @@
 @media (prefers-reduced-motion: reduce) {
   .demo-shell *, .demo-shell *::before, .demo-shell *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+
+/* --- Phase 1 real pages: auth (login) + live capture + app shell helpers --- */
+
+.auth-page { align-items: center; display: flex; justify-content: center; min-height: 100vh; padding: var(--space-4); }
+.auth-card { background: var(--surface-strong); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); display: grid; gap: var(--space-4); max-width: 430px; padding: clamp(1.5rem, 5vw, 2.5rem); width: 100%; }
+.auth-card .brand { align-items: center; color: inherit; display: flex; gap: 0.75rem; min-height: 44px; text-decoration: none; }
+.auth-card .brand__mark { align-items: center; background: var(--accent); border-radius: 12px 5px 12px 5px; color: white; display: flex; font-family: Georgia, serif; font-size: 1.25rem; font-weight: 700; height: 40px; justify-content: center; transform: rotate(-2deg); width: 40px; }
+.auth-card .brand strong, .auth-card .brand small { display: block; }
+.auth-card .brand strong { font-size: 1.05rem; letter-spacing: 0.01em; }
+.auth-card .brand small { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase; }
+.auth-card h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(1.9rem, 5vw, 2.6rem); letter-spacing: -0.045em; line-height: 1; margin: 0 0 var(--space-2); }
+.auth-card .eyebrow { color: var(--accent); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em; margin-bottom: var(--space-2); text-transform: uppercase; }
+.auth-subtitle { color: var(--muted); line-height: 1.65; margin: 0; }
+.auth-form { display: grid; gap: var(--space-3); }
+.auth-footnote { color: var(--muted); font-size: 0.78rem; margin: 0; }
+.auth-footnote a { color: var(--accent); }
+.auth-card .member-error { margin: 0; }
+
+.demo-shell a.nav-button, .demo-shell a.bottom-nav__button { text-decoration: none; }
+.app-loading-shell { display: block; }
+.app-loading { align-items: center; display: grid; gap: var(--space-3); justify-content: center; min-height: 60vh; padding: var(--space-5); text-align: center; }
+.app-loading .button-secondary { width: auto; }
+.app-signout { width: auto; }
+
+.camera-preview { overflow: hidden; padding: 0; }
+.camera-video { border-radius: 14px; display: block; max-height: 320px; object-fit: cover; width: 100%; }
+.camera-capture { display: grid; gap: 0.75rem; }
