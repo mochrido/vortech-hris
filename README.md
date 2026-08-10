@@ -144,8 +144,9 @@ Run this on a real phone over LAN HTTPS (previous section) to accept Phase 1. It
 
 ```sql
 -- Assign the fixed schedule to the demo member (from today, open-ended).
-INSERT INTO user_schedule_assignments (user_id, schedule_id, effective_from)
-SELECT u.id, s.id, CURRENT_DATE
+-- tenant_id is NOT NULL on these assignment tables (migration 0007).
+INSERT INTO user_schedule_assignments (tenant_id, user_id, schedule_id, effective_from)
+SELECT u.tenant_id, u.id, s.id, CURRENT_DATE
 FROM users u
 JOIN schedules s ON s.tenant_id = u.tenant_id AND s.name = 'Jam Kantor Tetap'
 WHERE u.email_normalized = 'member@vortech-demo.local'
@@ -155,8 +156,8 @@ WHERE u.email_normalized = 'member@vortech-demo.local'
   );
 
 -- Assign the Jakarta HQ location to the demo member.
-INSERT INTO user_locations (user_id, location_id)
-SELECT u.id, l.id
+INSERT INTO user_locations (tenant_id, user_id, location_id)
+SELECT u.tenant_id, u.id, l.id
 FROM users u
 JOIN locations l ON l.tenant_id = u.tenant_id AND l.name = 'Kantor Pusat Jakarta'
 WHERE u.email_normalized = 'member@vortech-demo.local'
