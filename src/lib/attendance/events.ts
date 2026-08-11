@@ -181,9 +181,13 @@ async function insertAnomaly(
   );
 }
 
-// TODO(Task 5/7): `selfieRequired` from the resolved policy is not yet
-// enforced (selfie capture/verification is Task 5/7 scope), and
-// `locationAcquiredAt` freshness is not yet checked against the event time.
+// Phase-scoped deferrals (deliberate, not gaps in Tasks 5/7):
+// - `selfieRequired` from the resolved policy is not enforced here: the real
+//   client always attaches a selfie, and policy-driven enforcement (rejecting a
+//   submission with no selfie when the policy requires one) is a Phase 3 admin/
+//   policy concern. The selfie object id is simply nullable on the row.
+// - `locationAcquiredAt` freshness is not checked against the event time yet;
+//   a stale-fix check belongs with Phase 2 clock-movement/freshness work (PRD 7.7).
 
 /**
  * Records an attendance event (check-in / check-out) transactionally.

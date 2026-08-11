@@ -30,7 +30,7 @@ export async function GET(req: NextRequest, ctx: RouteContext): Promise<NextResp
     // query and return 404, matching the objects route and the no-existence-leak
     // contract: an id that can never exist is indistinguishable from a missing one.
     if (!UUID_RE.test(id)) {
-      throw new AppError(ErrorCodes.VALIDATION_FAILED, 'Event not found', 404);
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Event not found', 404);
     }
 
     const result = await getPool().query(
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest, ctx: RouteContext): Promise<NextResp
 
     const row = result.rows[0];
     if (!row) {
-      throw new AppError(ErrorCodes.VALIDATION_FAILED, 'Event not found', 404);
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Event not found', 404);
     }
     return NextResponse.json({ event: row }, { status: 200 });
   } catch (err) {

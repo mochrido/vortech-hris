@@ -14,7 +14,7 @@ interface RouteContext {
 }
 
 function notFound(): AppError {
-  return new AppError(ErrorCodes.VALIDATION_FAILED, 'Object not found', 404);
+  return new AppError(ErrorCodes.NOT_FOUND, 'Object not found', 404);
 }
 
 /**
