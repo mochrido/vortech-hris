@@ -57,6 +57,15 @@ export interface ResolvedSession {
   user: UserRow;
 }
 
+/**
+ * Test-only handle to the in-flight last_seen_at touch from the most recent
+ * `getSessionByToken` call. Production code path is unchanged (the touch is
+ * still fire-and-forget and errors are still swallowed); this merely lets a
+ * test await the same promise instead of guessing with a fixed sleep. The
+ * promise always resolves (never rejects) because errors are swallowed.
+ */
+export const __lastSeenTouchForTesting: { last: Promise<void> | null } = { last: null };
+
 /** SHA-256 hex of a raw session token. Only this hash is ever stored. */
 export function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
@@ -187,7 +196,11 @@ export async function getSessionByToken(token: string): Promise<ResolvedSession 
   // freshness predicate lives in the UPDATE's WHERE clause so the decision is
   // atomic in Postgres (no read-then-write race). The row resolved above is
   // already known valid, so this is a best-effort, single-statement touch.
-  pool
+  // The promise is captured and exposed via `__lastSeenTouchForTesting` so
+  // tests can await the write deterministically instead of a wall-clock sleep.
+  // Errors are swallowed here so a failed touch NEVER rejects session
+  // resolution; the exposed promise therefore always resolves.
+  const touch: Promise<void> = pool
     .query(
       `UPDATE sessions
           SET last_seen_at = now()
@@ -195,10 +208,12 @@ export async function getSessionByToken(token: string): Promise<ResolvedSession 
           AND (last_seen_at IS NULL OR last_seen_at < now() - ($2 * interval '1 second'))`,
       [tokenHash, LAST_SEEN_THROTTLE_SECONDS],
     )
+    .then(() => undefined)
     .catch(() => {
       // Swallow errors: failing to refresh last_seen_at must never fail the
       // session resolution itself.
     });
+  __lastSeenTouchForTesting.last = touch;
 
   const row = result.rows[0];
   const session: SessionRow = {

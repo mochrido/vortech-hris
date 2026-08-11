@@ -37,11 +37,23 @@ ENV HOSTNAME=0.0.0.0
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 
+# The `jobs` compose service runs maintenance scripts (auto-checkout,
+# migrations) straight off the repo with the same traced node_modules as the
+# server bundle; ship the script, migration, and shared-lib trees.
+COPY --from=build --chown=node:node /app/scripts ./scripts
+COPY --from=build --chown=node:node /app/migrations ./migrations
+COPY --from=build --chown=node:node /app/src/lib ./src/lib
+
 # Guarantee the destination exists even if the source repo has an empty or
 # absent public/ (a bare `COPY /app/public ./public` fails the BuildKit build
 # when the source directory is missing). public/.gitkeep keeps the dir tracked.
 RUN mkdir -p ./public
 COPY --from=build --chown=node:node /app/public ./public
+
+# Selfie/object storage lives at ./data/objects (STORAGE_DIR default). Pre-create
+# it owned by the unprivileged `node` user so the runtime can write even before
+# the named volume mounts, and so a root-owned /app doesn't block mkdir.
+RUN mkdir -p ./data/objects && chown -R node:node ./data
 
 USER node
 

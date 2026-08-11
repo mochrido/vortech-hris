@@ -28,6 +28,7 @@ test('runMigrations creates schema_migrations, applies pending migrations once, 
       '0004_locations_schedules',
       '0005_attendance',
       '0006_files_jobs',
+      '0007_phase1_tuning',
     ],
     'expected all migrations to be applied in filename order',
   );
@@ -50,5 +51,6 @@ test('runMigrations creates schema_migrations, applies pending migrations once, 
     '0004_locations_schedules',
     '0005_attendance',
     '0006_files_jobs',
+    '0007_phase1_tuning',
   ]);
 });

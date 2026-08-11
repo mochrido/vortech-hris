@@ -15,6 +15,11 @@ services:
         condition: service_healthy
     expose:
       - "3000"
+    volumes:
+      # Persist uploaded selfie/object blobs (STORAGE_DIR=./data/objects) so they
+      # survive container recreates; stored_objects rows live in pgdata, so the
+      # blobs must too or GET /api/v1/objects/[id] 404s on existing rows.
+      - objects_data:/app/data/objects
     healthcheck:
       # node:22-alpine ships no curl/wget; use the Node runtime's global fetch.
       test:
@@ -70,8 +75,9 @@ services:
       - internal
 
   # Scheduled retention / auto-checkout jobs. These run the SAME web image so
-  # the job code ships with the app. The job itself is implemented in Phase 1+;
-  # this Phase 0 placeholder just proves the wiring. Run with:
+  # the job code ships with the app. NOTE: the runner stage of the Dockerfile
+  # must copy scripts/, migrations/, and src/lib (plus the traced node_modules)
+  # for this command to resolve. Run with:
   #   docker compose --profile jobs run --rm jobs
   jobs:
     image: vortech-hris-web
@@ -84,9 +90,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # Phase 0 placeholder; replace with the real retention/auto-checkout
-    # command once the job lands (Phase 1+).
-    command: ["node", "-e", "console.log('jobs: retention/auto-checkout not yet implemented (Phase 1+)')"]
+    # Phase 1: shift-end auto-checkout (PRD 7.7, decisions.md #3). Closes work
+    # instances whose shift ended without a check-out. Idempotent, so it is
+    # safe to run on a schedule:
+    #   docker compose --profile jobs run --rm jobs
+    command: ["node", "--experimental-strip-types", "scripts/jobs/auto-checkout.ts"]
     networks:
       - internal
 
@@ -94,6 +102,7 @@ volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  objects_data:
 
 networks:
   internal:

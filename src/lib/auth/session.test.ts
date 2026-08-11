@@ -13,15 +13,12 @@ import {
   revokeSession,
   revokeUserSessions,
   hashToken,
+  __lastSeenTouchForTesting,
   type SessionCookie,
 } from './session.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const migrationsDir = path.join(repoRoot, 'migrations');
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * Runs fn while capturing console.warn output, then restores the original.
@@ -334,7 +331,7 @@ test('getSessionByToken populates last_seen_at when NULL, then throttles immedia
 
     // First resolution: last_seen_at is NULL so the throttled UPDATE fires.
     await getSessionByToken(created.token);
-    await sleep(150); // allow the fire-and-forget UPDATE to commit
+    await __lastSeenTouchForTesting.last; // deterministically await the touch
 
     const afterFirst = await fixture.pool.query<{ last_seen_at: Date | null }>(
       'SELECT last_seen_at FROM sessions WHERE id = $1',
@@ -346,7 +343,7 @@ test('getSessionByToken populates last_seen_at when NULL, then throttles immedia
     // Immediate second resolution: last_seen_at is fresh (< 60s), so the UPDATE
     // is a no-op and the stored value must NOT be rewritten.
     await getSessionByToken(created.token);
-    await sleep(150);
+    await __lastSeenTouchForTesting.last;
 
     const afterSecond = await fixture.pool.query<{ last_seen_at: Date | null }>(
       'SELECT last_seen_at FROM sessions WHERE id = $1',
@@ -375,7 +372,7 @@ test('getSessionByToken refreshes last_seen_at once it is older than the throttl
     ]);
 
     await getSessionByToken(created.token);
-    await sleep(150); // allow the fire-and-forget UPDATE to commit
+    await __lastSeenTouchForTesting.last; // deterministically await the touch
 
     const after = await fixture.pool.query<{ last_seen_at: Date | null }>(
       'SELECT last_seen_at FROM sessions WHERE id = $1',

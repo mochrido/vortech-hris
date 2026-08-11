@@ -19,8 +19,11 @@ If a decision changes, update this file and note the change in `CHANGELOG.md`.
 
 ## Uploads and branding
 
-5. **Selfie upload** — Hard ceiling **1 MB**. Browser resizes to ~1280px longest edge; server
-   re-encodes to **JPEG quality 80** after validating decoded format/dimensions/signature.
+5. **Selfie upload** — Hard ceiling **1 MB**. The browser resizes to ~**1280px** longest edge
+   and re-encodes to **JPEG quality 80** client-side (Canvas). The server does NOT decode or
+   re-encode pixels (no native image library); it independently validates the untrusted bytes —
+   JPEG magic bytes (SOI/EOI), size (<= **1 MB**), and declared dimensions (<= **1280px**
+   longest edge) — and stores the validated blob as-is.
 6. **Branding files** — Logo **512px / 300 KB**, PWA icon **512px / 300 KB**, splash
    **1600px / 1 MB**. Validate MIME, decoded format, dimensions, and size.
 
@@ -49,3 +52,40 @@ If a decision changes, update this file and note the change in `CHANGELOG.md`.
     `superadmin` row in `user_roles`, never from the tenant. Superadmin CRUD endpoints are
     role-checked, non-tenant-scoped paths. **Caveat:** tenant-level reporting and metrics
     must explicitly exclude the platform tenant to avoid skewing counts.
+
+## Attendance enforcement
+
+12. **Accuracy vs. geofence precedence (PRD 7.5)** — Poor GPS accuracy (> 50 m after retries)
+    and geofence inside/outside are **independent facts**, not an either/or verdict. The
+    mandatory-geofence **block always applies** when a worker is outside all assigned
+    locations, even if accuracy was poor; the accuracy anomaly is still recorded. Concretely:
+    - `mandatory` + outside (any accuracy) → **blocked**; accuracy anomaly recorded when poor.
+    - `mandatory` + inside + poor accuracy → accepted, flagged `needs_review` (accuracy).
+    - `optional` (field_worker) → always accepted; the verdict records **both** the accuracy
+      flag and the inside/outside fact for review context.
+    The verdict type must carry the accuracy anomaly separately from the inside/outside result.
+
+## Phase status
+
+- **Phase 1 (online attendance) is complete.** Tenant login, online check-in/out
+  (selfie + GPS + geofence), attendance calculations, member and manager
+  dashboards, the shift-end auto-checkout job, and private object storage are
+  implemented and verified against the real backend.
+- Phase-1 scope decisions worth recording:
+  - **Client-side pixel re-encode only (reaffirms #5).** The browser produces
+    the validated, watermarked, resized JPEG via Canvas. The server does not
+    decode or re-encode pixels; it independently validates the untrusted bytes
+    (JPEG SOI/EOI magic bytes, size <= 1 MB, SOF-parsed dimensions <= 1280 px)
+    and stores the blob as-is. No native image library was added.
+  - **Accuracy anomaly is carried separately from inside/outside (implements #12).**
+    The geofence verdict records the accuracy flag independently, and a
+    mandatory block always applies when a worker is outside all assigned
+    locations even if accuracy was poor.
+  - **Member history and admin write are deferred to Phase 3.** The Phase 1
+    history view reads recent attendance from the member dashboard payload, and
+    the admin locations/policies/schedules pages are read shells — full CRUD is
+    Phase 3 scope. Offline/PWA sync is Phase 2.
+  - **LAN HTTPS phone testing is a dev/test aid, not a production TLS path.**
+    `Caddyfile.lan` + `docker-compose.lan.yml` serve the app at a LAN IP using
+    Caddy's internal CA so a phone can grant camera/GPS (secure context). The
+    production path remains `Caddyfile` + a public `DOMAIN` with ACME.
