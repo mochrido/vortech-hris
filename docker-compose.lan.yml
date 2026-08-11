@@ -3,18 +3,21 @@
 #   docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d --build
 #
 # It replaces the caddy service's production config (public DOMAIN, automatic
-# ACME certificates) with Caddyfile.lan, which serves the app at the PC's LAN
-# IP using Caddy's internal CA. The base docker-compose.yml and Caddyfile are
+# ACME certificates) with Caddyfile.lan, which serves the app at a LAN HOSTNAME
+# using Caddy's internal CA. The base docker-compose.yml and Caddyfile are
 # untouched. See README "Phone testing over LAN (HTTPS)".
 name: vortech-hris
 
 services:
   caddy:
     environment:
-      # Caddyfile.lan references {$LAN_IP}; pass it through. This must be the
-      # PC's current LAN address (e.g. 192.168.1.50). No default: an empty
-      # value would make Caddy misparse the file, so fail loudly instead.
-      LAN_IP: ${LAN_IP:?Set LAN_IP in .env to this PC's LAN IP (e.g. 192.168.1.50)}
+      # Caddyfile.lan references {$LAN_HOST}; pass it through. This must be a
+      # hostname that resolves to this PC's LAN address (a bare IP does NOT work
+      # reliably with `tls internal` — the TLS handshake aborts). The easiest
+      # zero-DNS option is nip.io, e.g. for LAN IP 192.168.1.50:
+      #   LAN_HOST=192.168.1.50.nip.io
+      # No default: an empty value would make Caddy misparse the file.
+      LAN_HOST: ${LAN_HOST:?Set LAN_HOST in .env to a hostname resolving to this PC's LAN IP (e.g. 192.168.1.50.nip.io)}
     volumes:
       - ./Caddyfile.lan:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

@@ -9,10 +9,18 @@
 # local CA ("Caddy Local Authority") instead of a public ACME CA. The LAN IP
 # is not publicly routable, so no public CA could issue a cert for it anyway.
 #
-# LAN_IP is provided via the environment (see .env.example) and must be the
-# PC's current address on the local network, e.g. 192.168.1.50.
+# LAN_HOST is provided via the environment (see .env.example) and must be a
+# HOSTNAME that resolves to the PC's LAN address — NOT a bare IP. Caddy's
+# `tls internal` cannot reliably serve certificates for a bare IP (the TLS
+# handshake aborts when the client offers an IP SNI), and iOS/Safari is strict
+# about IP certs, so a hostname is required for phone testing.
+#
+# Easiest zero-DNS option: a nip.io address, which maps a hostname to your LAN
+# IP with no DNS setup — e.g. for LAN IP 192.168.1.50 use:
+#   LAN_HOST=192.168.1.50.nip.io
+# (Any name that resolves to the PC's LAN IP works, e.g. a router DNS name.)
 
-https://{$LAN_IP} {
+https://{$LAN_HOST} {
 	# Use Caddy's internal CA. The root certificate is generated on first run
 	# and stored in the caddy_data volume at
 	# /data/caddy/pki/authorities/local/root.crt — install it on the phone (or

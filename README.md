@@ -89,9 +89,11 @@ docker compose --profile jobs run --rm jobs
 
 ## Phone testing over LAN (HTTPS)
 
-Camera and geolocation are only available to a page in a **secure context**, which browsers grant over HTTPS (or on `localhost`). A phone on the same Wi-Fi cannot use the PC's `localhost`, so to test check-in on a real phone the app must be reachable over **HTTPS at the PC's LAN IP**. The production `Caddyfile` uses a public domain with ACME certificates, which can't work for a non-routable LAN IP, so this repo ships an **opt-in LAN config** instead: `Caddyfile.lan` + a `docker-compose.lan.yml` override. The default production path (`Caddyfile` + `DOMAIN`) is untouched.
+Camera and geolocation are only available to a page in a **secure context**, which browsers grant over HTTPS (or on `localhost`). A phone on the same Wi-Fi cannot use the PC's `localhost`, so to test check-in on a real phone the app must be reachable over **HTTPS at an address the phone can resolve**. The production `Caddyfile` uses a public domain with ACME certificates, which can't work for a non-routable LAN address, so this repo ships an **opt-in LAN config** instead: `Caddyfile.lan` + a `docker-compose.lan.yml` override. The default production path (`Caddyfile` + `DOMAIN`) is untouched.
 
-How it works: `Caddyfile.lan` serves `https://<LAN_IP>` with Caddy's `tls internal`, so Caddy issues the site certificate from its own local CA ("Caddy Local Authority") instead of a public ACME CA. On first run Caddy generates that CA and stores its root certificate in the `caddy_data` volume at `/data/caddy/pki/authorities/local/root.crt`. Because no public CA is involved, the phone won't trust the cert until you either install that root cert on the phone or proceed past the browser warning.
+**Use a hostname, not a bare IP.** Caddy's `tls internal` cannot reliably serve a certificate for a bare IP address (the TLS handshake aborts when the client offers an IP SNI), and iOS/Safari is strict about IP certs. So `Caddyfile.lan` serves a **hostname** that resolves to the PC's LAN IP. The easiest zero-DNS option is a [nip.io](https://nip.io) address: `192.168.0.126.nip.io` resolves to LAN IP `192.168.0.126` automatically (the phone needs ordinary internet access for that one DNS lookup, which it has over Wi-Fi). Any hostname that resolves to the PC's LAN IP works.
+
+How it works: `Caddyfile.lan` serves `https://<LAN_HOST>` with Caddy's `tls internal`, so Caddy issues the site certificate (with the hostname in the SAN) from its own local CA ("Caddy Local Authority") instead of a public ACME CA. On first run Caddy generates that CA and stores its root certificate in the `caddy_data` volume at `/data/caddy/pki/authorities/local/root.crt`. Because no public CA is involved, the phone won't trust the cert until you install that root cert on the phone (or proceed past the browser warning).
 
 **Steps**
 
@@ -99,21 +101,27 @@ How it works: `Caddyfile.lan` serves `https://<LAN_IP>` with Caddy's `tls intern
    - Windows (PowerShell): `ipconfig` → look for the adapter's `IPv4 Address`.
    - macOS: `ipconfig getifaddr en0`
    - Linux: `hostname -I`
-2. **Set `LAN_IP` in `.env`** to that address, e.g. `LAN_IP=192.168.1.50`. (`.env.example` documents the variable; it is a non-secret placeholder.)
-3. **Start the stack with the LAN override** (both compose files):
+2. **Set `LAN_HOST` in `.env`** to the nip.io hostname for that IP, e.g. for IP `192.168.0.126` use `LAN_HOST=192.168.0.126.nip.io`. (`.env.example` documents the variable; it is a non-secret placeholder.)
+3. **Allow inbound TCP 80/443 through the PC's firewall.** On Windows, if the network profile is **Public**, inbound is blocked by default — add a rule (elevated PowerShell):
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Vortech HRIS LAN (80,443)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80,443 -Profile Any
+   ```
+
+4. **Start the stack with the LAN override** (both compose files):
 
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d --build
    ```
 
-   The override only re-points the `caddy` service at `Caddyfile.lan` and passes `LAN_IP`; `web` and `postgres` are unchanged. On first run, apply migrations and seed as usual:
+   The override only re-points the `caddy` service at `Caddyfile.lan` and passes `LAN_HOST`; `web` and `postgres` are unchanged. On first run, apply migrations and seed as usual:
 
    ```bash
    docker compose exec web node --experimental-strip-types scripts/migrate.ts
    docker compose exec web node --experimental-strip-types scripts/seed.ts
    ```
 
-4. **Make the phone trust the certificate** (recommended). Copy Caddy's local root cert out of the volume and install it on the phone:
+5. **Make the phone trust the certificate** (recommended). Copy Caddy's local root cert out of the volume and install it on the phone:
 
    ```bash
    docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-local-root.crt
@@ -123,12 +131,13 @@ How it works: `Caddyfile.lan` serves `https://<LAN_IP>` with Caddy's `tls intern
    - **Android:** Settings → Security & privacy → More security & privacy → Encryption & credentials → Install a certificate → **CA certificate** → "Install anyway" → pick the file. Chrome on Android trusts user-installed CAs for websites, so the warning clears.
    - **iPhone:** send the `.crt` to the phone (AirDrop / Mail) → Settings → **Profile Downloaded** → Install; then Settings → General → About → **Certificate Trust Settings** → enable full trust for "Caddy Local Authority".
 
-   **Or skip trust (quick pass):** open the URL and proceed past the warning — Chrome: **Advanced → Proceed to \<ip\> (unsafe)** (if no Proceed button shows, click the page and type `thisisunsafe`). The connection is still HTTPS, so camera/GPS work after the bypass, but the warning returns each session and some browsers are stricter — installing the root cert is the reliable path.
-5. **Open the app on the phone** (same Wi-Fi): `https://<LAN_IP>/vortech-demo/login`, log in as the member, and check in — the camera and location prompts should now appear.
+   **Or skip trust (quick pass):** open the URL and proceed past the warning — Chrome: **Advanced → Proceed** (if no Proceed button shows, click the page and type `thisisunsafe`). The connection is still HTTPS, so camera/GPS work after the bypass, but the warning returns each session and some browsers are stricter — installing the root cert is the reliable path.
+6. **Open the app on the phone** (same Wi-Fi): `https://<LAN_HOST>/vortech-demo/login` (e.g. `https://192.168.0.126.nip.io/vortech-demo/login`), log in as the member, and check in — the camera and location prompts should now appear.
 
 **Notes / troubleshooting**
-- Allow inbound TCP 80/443 through the PC's firewall, and make sure the phone and PC are on the same Wi-Fi (guest networks / "AP isolation" block peer traffic).
-- If the PC's LAN IP changes (DHCP), update `LAN_IP` in `.env` and re-run the `up` command; the cert is re-issued for the new IP.
+- Make sure the phone and PC are on the same network (guest networks / "AP isolation" block peer traffic). The nip.io DNS lookup needs internet, but all app traffic stays on the LAN.
+- A **bare IP URL** (`https://192.168.0.126/...`) will fail the TLS handshake / iOS secure-connection check — always use the `LAN_HOST` hostname.
+- If the PC's LAN IP changes (DHCP), update `LAN_HOST` in `.env` to the new `<ip>.nip.io` and re-run the `up` command; the cert is re-issued for the new name.
 - To return to the normal path, stop the LAN stack and start the default one:
 
   ```bash
